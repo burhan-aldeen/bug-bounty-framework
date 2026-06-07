@@ -2,6 +2,7 @@ import asyncio
 import sys
 from pathlib import Path
 
+from core import checkpoint
 from core.config import Config
 from core.logger import configure_logging, get_logger
 from core.models import AliveHost, ScanResult, Subdomain
@@ -36,7 +37,7 @@ async def run_scan(target: str, config: Config) -> ScanResult:
     return result
 
 
-async def run_scan_list(targets_file: Path, config: Config) -> list[ScanResult]:
+async def run_scan_list(targets_file: Path, config: Config, resume: bool = False) -> list[ScanResult]:
     try:
         lines = targets_file.read_text(encoding="utf-8-sig").strip().splitlines()
     except OSError as exc:
@@ -45,47 +46,80 @@ async def run_scan_list(targets_file: Path, config: Config) -> list[ScanResult]:
     targets = [line.strip() for line in lines if line.strip() and not line.strip().startswith("#")]
     logger.info("scan list: %d targets from %s", len(targets), targets_file)
 
+    cp_dir = config.scan.output_dir
+    last_phase = checkpoint.completed_phase(cp_dir)
+
+    if resume and last_phase > 0:
+        logger.info("resuming from phase %d checkpoint", last_phase)
+
+    # ----------------------------------------------------------------
     # Phase 1a — Subdomain enumeration: ALL targets first
-    logger.info("=== PHASE 1a: SUBDOMAIN ENUMERATION (%d targets) ===", len(targets))
-    all_subdomain_sets: list[list[Subdomain]] = []
-    for i, target in enumerate(targets, 1):
-        logger.info("enum [%d/%d]: %s", i, len(targets), target)
-        subs = await recon.enumerate_subdomains(target)
-        all_subdomain_sets.append(subs)
+    # ----------------------------------------------------------------
+    if resume and last_phase >= 1:
+        raw = checkpoint.load_phase(cp_dir, 1, "1a_subdomains")
+        all_subdomain_sets = checkpoint.rebuild_subdomains(raw) if raw else []
+        if not all_subdomain_sets:
+            logger.warning("checkpoint 1a corrupt, re-running")
+            resume = False
+    if not resume or last_phase < 1:
+        logger.info("=== PHASE 1a: SUBDOMAIN ENUMERATION (%d targets) ===", len(targets))
+        all_subdomain_sets: list[list[Subdomain]] = []
+        for i, target in enumerate(targets, 1):
+            logger.info("enum [%d/%d]: %s", i, len(targets), target)
+            subs = await recon.enumerate_subdomains(target)
+            all_subdomain_sets.append(subs)
+        checkpoint.save_phase(cp_dir, 1, "1a_subdomains", all_subdomain_sets)
 
+    # ----------------------------------------------------------------
     # Phase 1b — Alive check: ALL subdomains from ALL targets
-    all_domains: list[str] = []
-    target_domain_map: dict[str, str] = {}  # subdomain -> original target
-    for i, target in enumerate(targets):
-        for s in all_subdomain_sets[i]:
-            all_domains.append(s.domain)
-            target_domain_map[s.domain] = target
+    # ----------------------------------------------------------------
+    if resume and last_phase >= 2:
+        raw = checkpoint.load_phase(cp_dir, 2, "1b_alive")
+        all_alive = checkpoint.rebuild_alive(raw) if raw else []
+        if not all_alive:
+            logger.warning("checkpoint 1b corrupt, re-running")
+            resume = False
+    if not resume or last_phase < 2:
+        all_domains: list[str] = []
+        for subs in all_subdomain_sets:
+            for s in subs:
+                all_domains.append(s.domain)
+        if not all_domains:
+            logger.warning("no subdomains found, trying root domains")
+            all_domains = targets
+        logger.info("=== PHASE 1b: ALIVE CHECK (%d unique hosts) ===", len(all_domains))
+        all_alive = await recon.check_alive(list(dict.fromkeys(all_domains)))
+        checkpoint.save_phase(cp_dir, 2, "1b_alive", all_alive)
 
-    if not all_domains:
-        logger.warning("no subdomains found across any target, trying root domains")
-        all_domains = targets
-        for t in targets:
-            target_domain_map[t] = t
-
-    logger.info("=== PHASE 1b: ALIVE CHECK (%d unique hosts) ===", len(all_domains))
-    all_alive = await recon.check_alive(list(dict.fromkeys(all_domains)))
-
+    # ----------------------------------------------------------------
     # Phase 1c — URL collection: for ALL targets
-    logger.info("=== PHASE 1c: URL COLLECTION (%d targets) ===", len(targets))
-    all_urls: list[str] = []
-    seen_urls: set[str] = set()
-    for i, target in enumerate(targets):
-        host_urls = [h for h in all_alive if target_domain_map.get(h.url.split("//")[-1].split("/")[0], "") == target]
-        if not host_urls:
-            host_urls = [h for h in all_alive]
-        urls = await recon.collect_urls(target, host_urls)
-        for u in urls:
-            if u not in seen_urls:
-                seen_urls.add(u)
-                all_urls.append(u)
+    # ----------------------------------------------------------------
+    if resume and last_phase >= 3:
+        raw_urls = checkpoint.load_phase(cp_dir, 3, "1c_urls")
+        all_urls = raw_urls if raw_urls else []
+        raw_hosts = checkpoint.load_phase(cp_dir, 3, "1c_hosts")
+        all_hosts = checkpoint.rebuild_alive(raw_hosts) if raw_hosts else []
+        if not all_urls and not all_hosts:
+            logger.warning("checkpoint 1c corrupt, re-running")
+            resume = False
+    if not resume or last_phase < 3:
+        logger.info("=== PHASE 1c: URL COLLECTION (%d targets) ===", len(targets))
+        all_urls: list[str] = []
+        seen_urls: set[str] = set()
+        for i, target in enumerate(targets):
+            host_urls = [h for h in all_alive if target in h.url]
+            if not host_urls:
+                host_urls = all_alive
+            urls = await recon.collect_urls(target, host_urls)
+            for u in urls:
+                if u not in seen_urls:
+                    seen_urls.add(u)
+                    all_urls.append(u)
+        all_hosts: list[AliveHost] = list({h.url: h for h in all_alive}.values())
+        checkpoint.save_phase(cp_dir, 3, "1c_urls", all_urls)
+        checkpoint.save_phase(cp_dir, 3, "1c_hosts", all_hosts)
 
     # Build per-target ScanResult objects
-    all_hosts: list[AliveHost] = list({h.url: h for h in all_alive}.values())
     all_results: list[ScanResult] = []
     for i, target in enumerate(targets):
         result = ScanResult(target=target)
@@ -94,19 +128,45 @@ async def run_scan_list(targets_file: Path, config: Config) -> list[ScanResult]:
         result.urls = [u for u in all_urls if target in u]
         all_results.append(result)
 
+    # ----------------------------------------------------------------
     # Phase 2 — Hunt on ALL URLs
-    logger.info("=== PHASE 2: HUNT (%d urls) ===", len(all_urls))
-    all_hunt_findings = await hunt.run(all_urls)
+    # ----------------------------------------------------------------
+    if resume and last_phase >= 4:
+        raw = checkpoint.load_phase(cp_dir, 4, "2_hunt")
+        all_hunt_findings = checkpoint.rebuild_findings(raw) if raw else []
+        if not all_hunt_findings and all_urls:
+            logger.warning("checkpoint 2 empty but urls exist, re-running")
+            resume = False
+    if not resume or last_phase < 4:
+        logger.info("=== PHASE 2: HUNT (%d urls) ===", len(all_urls))
+        all_hunt_findings = await hunt.run(all_urls)
+        checkpoint.save_phase(cp_dir, 4, "2_hunt", all_hunt_findings)
 
+    # ----------------------------------------------------------------
     # Phase 3 — API Hacking on ALL hosts
-    logger.info("=== PHASE 3: API HACKING (%d hosts) ===", len(all_hosts))
-    all_api_findings = await api_hack.run(all_hosts, all_urls)
+    # ----------------------------------------------------------------
+    if resume and last_phase >= 5:
+        raw = checkpoint.load_phase(cp_dir, 5, "3_api")
+        all_api_findings = checkpoint.rebuild_findings(raw) if raw else []
+    else:
+        logger.info("=== PHASE 3: API HACKING (%d hosts) ===", len(all_hosts))
+        all_api_findings = await api_hack.run(all_hosts, all_urls)
+        checkpoint.save_phase(cp_dir, 5, "3_api", all_api_findings)
 
+    # ----------------------------------------------------------------
     # Phase 4 — Secrets on ALL hosts
-    logger.info("=== PHASE 4: SECRETS (%d hosts) ===", len(all_hosts))
-    all_secrets = await secrets_stage.run(all_hosts, all_urls)
+    # ----------------------------------------------------------------
+    if resume and last_phase >= 6:
+        raw = checkpoint.load_phase(cp_dir, 6, "4_secrets")
+        all_secrets = checkpoint.rebuild_secrets(raw) if raw else []
+    else:
+        logger.info("=== PHASE 4: SECRETS (%d hosts) ===", len(all_hosts))
+        all_secrets = await secrets_stage.run(all_hosts, all_urls)
+        checkpoint.save_phase(cp_dir, 6, "4_secrets", all_secrets)
 
-    # Phase 5 — Distribute findings back to per-target results + report
+    # ----------------------------------------------------------------
+    # Phase 5 — Distribute findings + report
+    # ----------------------------------------------------------------
     logger.info("=== PHASE 5: REPORT ===")
     for i, result in enumerate(all_results):
         config.scan.target = targets[i]
@@ -126,6 +186,7 @@ async def run_scan_list(targets_file: Path, config: Config) -> list[ScanResult]:
             len(result.findings), len(result.secrets),
         )
 
+    checkpoint.clear(cp_dir)
     logger.info("=== ALL PHASES COMPLETE (%d targets) ===", len(targets))
     return all_results
 
@@ -149,6 +210,8 @@ def main() -> None:
                         help="Log file path")
     parser.add_argument("--log-level", default="INFO",
                         choices=["DEBUG", "INFO", "WARNING", "ERROR"])
+    parser.add_argument("--resume", action="store_true",
+                        help="Resume from last checkpoint")
 
     args = parser.parse_args()
 
@@ -168,7 +231,7 @@ def main() -> None:
     config.scan.output_dir = args.output
 
     if args.targets_file:
-        results = asyncio.run(run_scan_list(args.targets_file, config))
+        results = asyncio.run(run_scan_list(args.targets_file, config, resume=args.resume))
         total_findings = sum(len(r.findings) for r in results)
         total_secrets = sum(len(r.secrets) for r in results)
         logger.info(
