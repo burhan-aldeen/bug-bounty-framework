@@ -32,6 +32,21 @@ async def run(domain: str) -> ScanResult:
     return result
 
 
+async def enumerate_subdomains(domain: str) -> list[Subdomain]:
+    logger.debug("recon/enum: %s", domain)
+    return await _enumerate_subdomains(domain)
+
+
+async def check_alive(domains: list[str]) -> list[AliveHost]:
+    logger.debug("recon/alive: %d hosts", len(domains))
+    return await _check_alive(domains)
+
+
+async def collect_urls(domain: str, hosts: list[AliveHost]) -> list[str]:
+    logger.debug("recon/urls: %s (%d hosts)", domain, len(hosts))
+    return await _collect_urls(domain, hosts)
+
+
 async def _enumerate_subdomains(domain: str) -> list[Subdomain]:
     tasks = []
     for tool_fn in [subfinder.run]:

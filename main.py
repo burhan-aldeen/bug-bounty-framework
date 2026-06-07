@@ -4,7 +4,7 @@ from pathlib import Path
 
 from core.config import Config
 from core.logger import configure_logging, get_logger
-from core.models import AliveHost, ScanResult
+from core.models import AliveHost, ScanResult, Subdomain
 from output.writer import write_all
 from stages import recon, hunt, api_hack, secrets as secrets_stage, report as report_stage
 
@@ -45,28 +45,53 @@ async def run_scan_list(targets_file: Path, config: Config) -> list[ScanResult]:
     targets = [line.strip() for line in lines if line.strip() and not line.strip().startswith("#")]
     logger.info("scan list: %d targets from %s", len(targets), targets_file)
 
-    # Phase 1 — Recon on ALL targets first
-    logger.info("=== PHASE 1: RECON (%d targets) ===", len(targets))
-    all_results: list[ScanResult] = []
+    # Phase 1a — Subdomain enumeration: ALL targets first
+    logger.info("=== PHASE 1a: SUBDOMAIN ENUMERATION (%d targets) ===", len(targets))
+    all_subdomain_sets: list[list[Subdomain]] = []
     for i, target in enumerate(targets, 1):
-        logger.info("recon [%d/%d]: %s", i, len(targets), target)
-        result = await recon.run(target)
-        all_results.append(result)
+        logger.info("enum [%d/%d]: %s", i, len(targets), target)
+        subs = await recon.enumerate_subdomains(target)
+        all_subdomain_sets.append(subs)
 
-    # Collect all URLs and alive hosts across all targets
+    # Phase 1b — Alive check: ALL subdomains from ALL targets
+    all_domains: list[str] = []
+    target_domain_map: dict[str, str] = {}  # subdomain -> original target
+    for i, target in enumerate(targets):
+        for s in all_subdomain_sets[i]:
+            all_domains.append(s.domain)
+            target_domain_map[s.domain] = target
+
+    if not all_domains:
+        logger.warning("no subdomains found across any target, trying root domains")
+        all_domains = targets
+        for t in targets:
+            target_domain_map[t] = t
+
+    logger.info("=== PHASE 1b: ALIVE CHECK (%d unique hosts) ===", len(all_domains))
+    all_alive = await recon.check_alive(list(dict.fromkeys(all_domains)))
+
+    # Phase 1c — URL collection: for ALL targets
+    logger.info("=== PHASE 1c: URL COLLECTION (%d targets) ===", len(targets))
     all_urls: list[str] = []
-    all_hosts: list[AliveHost] = []
     seen_urls: set[str] = set()
-    seen_hosts: set[str] = set()
-    for result in all_results:
-        for u in result.urls:
+    for i, target in enumerate(targets):
+        host_urls = [h for h in all_alive if target_domain_map.get(h.url.split("//")[-1].split("/")[0], "") == target]
+        if not host_urls:
+            host_urls = [h for h in all_alive]
+        urls = await recon.collect_urls(target, host_urls)
+        for u in urls:
             if u not in seen_urls:
                 seen_urls.add(u)
                 all_urls.append(u)
-        for h in result.alive_hosts:
-            if h.url not in seen_hosts:
-                seen_hosts.add(h.url)
-                all_hosts.append(h)
+
+    # Build per-target ScanResult objects
+    all_results: list[ScanResult] = []
+    for i, target in enumerate(targets):
+        result = ScanResult(target=target)
+        result.subdomains = all_subdomain_sets[i]
+        result.alive_hosts = [h for h in all_alive if target in h.url or target_domain_map.get(h.url.split("//")[-1].split("/")[0], "") == target]
+        result.urls = [u for u in all_urls if target in u]
+        all_results.append(result)
 
     # Phase 2 — Hunt on ALL URLs
     logger.info("=== PHASE 2: HUNT (%d urls) ===", len(all_urls))
