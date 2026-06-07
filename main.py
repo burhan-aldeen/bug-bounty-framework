@@ -4,7 +4,7 @@ from pathlib import Path
 
 from core.config import Config
 from core.logger import configure_logging, get_logger
-from core.models import ScanResult
+from core.models import AliveHost, ScanResult
 from output.writer import write_all
 from stages import recon, hunt, api_hack, secrets as secrets_stage, report as report_stage
 
@@ -45,17 +45,63 @@ async def run_scan_list(targets_file: Path, config: Config) -> list[ScanResult]:
     targets = [line.strip() for line in lines if line.strip() and not line.strip().startswith("#")]
     logger.info("scan list: %d targets from %s", len(targets), targets_file)
 
-    results: list[ScanResult] = []
+    # Phase 1 — Recon on ALL targets first
+    logger.info("=== PHASE 1: RECON (%d targets) ===", len(targets))
+    all_results: list[ScanResult] = []
     for i, target in enumerate(targets, 1):
-        logger.info("scan list [%d/%d]: %s", i, len(targets), target)
-        config.scan.target = target
-        output_dir = config.scan.output_dir / target.replace(".", "_")
-        config.scan.output_dir = output_dir
-        result = await run_scan(target, config)
-        results.append(result)
+        logger.info("recon [%d/%d]: %s", i, len(targets), target)
+        result = await recon.run(target)
+        all_results.append(result)
 
-    logger.info("scan list complete: %d/%d targets done", len(results), len(targets))
-    return results
+    # Collect all URLs and alive hosts across all targets
+    all_urls: list[str] = []
+    all_hosts: list[AliveHost] = []
+    seen_urls: set[str] = set()
+    seen_hosts: set[str] = set()
+    for result in all_results:
+        for u in result.urls:
+            if u not in seen_urls:
+                seen_urls.add(u)
+                all_urls.append(u)
+        for h in result.alive_hosts:
+            if h.url not in seen_hosts:
+                seen_hosts.add(h.url)
+                all_hosts.append(h)
+
+    # Phase 2 — Hunt on ALL URLs
+    logger.info("=== PHASE 2: HUNT (%d urls) ===", len(all_urls))
+    all_hunt_findings = await hunt.run(all_urls)
+
+    # Phase 3 — API Hacking on ALL hosts
+    logger.info("=== PHASE 3: API HACKING (%d hosts) ===", len(all_hosts))
+    all_api_findings = await api_hack.run(all_hosts, all_urls)
+
+    # Phase 4 — Secrets on ALL hosts
+    logger.info("=== PHASE 4: SECRETS (%d hosts) ===", len(all_hosts))
+    all_secrets = await secrets_stage.run(all_hosts, all_urls)
+
+    # Phase 5 — Distribute findings back to per-target results + report
+    logger.info("=== PHASE 5: REPORT ===")
+    for i, result in enumerate(all_results):
+        config.scan.target = targets[i]
+        output_dir = config.scan.output_dir / targets[i].replace(".", "_")
+        config.scan.output_dir = output_dir
+
+        result.findings = [f for f in all_hunt_findings if targets[i] in f.url or targets[i] in result.urls]
+        result.findings.extend(f for f in all_api_findings if targets[i] in f.url or targets[i] in result.urls)
+        result.secrets = [s for s in all_secrets if targets[i] in s.url or targets[i] in result.urls]
+
+        report = await report_stage.run(result)
+        write_all(report, output_dir)
+
+        logger.info(
+            "scan list [%d/%d] %s done: findings=%d secrets=%d",
+            i + 1, len(targets), targets[i],
+            len(result.findings), len(result.secrets),
+        )
+
+    logger.info("=== ALL PHASES COMPLETE (%d targets) ===", len(targets))
+    return all_results
 
 
 def main() -> None:
