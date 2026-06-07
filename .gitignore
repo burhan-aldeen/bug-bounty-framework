@@ -1,0 +1,10 @@
+﻿__pycache__/
+*.pyc
+.venv/
+.DS_Store
+scan.log
+output/report.json
+output/report.csv
+output/report.md
+screenshots/
+sqlmap_logs/
