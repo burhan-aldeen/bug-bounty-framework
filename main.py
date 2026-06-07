@@ -85,11 +85,12 @@ async def run_scan_list(targets_file: Path, config: Config) -> list[ScanResult]:
                 all_urls.append(u)
 
     # Build per-target ScanResult objects
+    all_hosts: list[AliveHost] = list({h.url: h for h in all_alive}.values())
     all_results: list[ScanResult] = []
     for i, target in enumerate(targets):
         result = ScanResult(target=target)
         result.subdomains = all_subdomain_sets[i]
-        result.alive_hosts = [h for h in all_alive if target in h.url or target_domain_map.get(h.url.split("//")[-1].split("/")[0], "") == target]
+        result.alive_hosts = [h for h in all_alive if target in h.url]
         result.urls = [u for u in all_urls if target in u]
         all_results.append(result)
 
