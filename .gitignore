@@ -3,8 +3,6 @@
 .venv/
 .DS_Store
 scan.log
-output/report.json
-output/report.csv
-output/report.md
+output/
 screenshots/
 sqlmap_logs/
