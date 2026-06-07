@@ -38,7 +38,7 @@ async def run_scan(target: str, config: Config) -> ScanResult:
 
 async def run_scan_list(targets_file: Path, config: Config) -> list[ScanResult]:
     try:
-        lines = targets_file.read_text(encoding="utf-8").strip().splitlines()
+        lines = targets_file.read_text(encoding="utf-8-sig").strip().splitlines()
     except OSError as exc:
         logger.error("cannot read targets file %s: %s", targets_file, exc)
         return []
