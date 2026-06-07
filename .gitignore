@@ -3,6 +3,7 @@
 .venv/
 .DS_Store
 scan.log
-output/
+output/report.*
+output/*/
 screenshots/
 sqlmap_logs/
