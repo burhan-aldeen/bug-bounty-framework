@@ -20,7 +20,7 @@ async def run(urls: list[str]) -> list[Finding]:
         "--output-dir=sqlmap_logs",
     ]
     logger.info("sqlmap: testing %d urls", len(urls))
-    result = await run_captured(cmd, input_data=input_file.encode())
+    result = await run_captured(cmd, stdin_data=input_file.encode())
     return parse_output(result.stdout + result.stderr)
 
 

@@ -25,7 +25,7 @@ async def run(
         "-json",
     ]
     logger.info("httpx: probing %d hosts", len(domains))
-    result = await run_captured(cmd, input_data=input_data.encode())
+    result = await run_captured(cmd, stdin_data=input_data.encode())
     return parse_output(result.stdout)
 
 

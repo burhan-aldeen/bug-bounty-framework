@@ -36,13 +36,37 @@ async def run_scan(target: str, config: Config) -> ScanResult:
     return result
 
 
+async def run_scan_list(targets_file: Path, config: Config) -> list[ScanResult]:
+    try:
+        lines = targets_file.read_text(encoding="utf-8").strip().splitlines()
+    except OSError as exc:
+        logger.error("cannot read targets file %s: %s", targets_file, exc)
+        return []
+    targets = [line.strip() for line in lines if line.strip() and not line.strip().startswith("#")]
+    logger.info("scan list: %d targets from %s", len(targets), targets_file)
+
+    results: list[ScanResult] = []
+    for i, target in enumerate(targets, 1):
+        logger.info("scan list [%d/%d]: %s", i, len(targets), target)
+        config.scan.target = target
+        output_dir = config.scan.output_dir / target.replace(".", "_")
+        config.scan.output_dir = output_dir
+        result = await run_scan(target, config)
+        results.append(result)
+
+    logger.info("scan list complete: %d/%d targets done", len(results), len(targets))
+    return results
+
+
 def main() -> None:
     import argparse
 
     parser = argparse.ArgumentParser(
         description="Bug Bounty Recon & Vulnerability Hunting Framework"
     )
-    parser.add_argument("target", help="Target domain (e.g. example.com)")
+    parser.add_argument("target", nargs="?", help="Target domain (e.g. example.com)")
+    parser.add_argument("--list", "-l", type=Path, dest="targets_file",
+                        help="File with one target domain per line")
     parser.add_argument("--authorized", action="store_true", required=True,
                         help="Acknowledge target is authorized for testing")
     parser.add_argument("--quick", action="store_true",
@@ -60,19 +84,32 @@ def main() -> None:
         logger.error("--authorized flag is required")
         sys.exit(2)
 
+    if not args.target and not args.targets_file:
+        logger.error("provide a target domain or --list file")
+        sys.exit(2)
+
     configure_logging(args.log_file, args.log_level)
 
     config = Config()
-    config.scan.target = args.target
     config.scan.authorized = True
     config.scan.quick = args.quick
     config.scan.output_dir = args.output
 
-    result = asyncio.run(run_scan(args.target, config))
-    logger.info(
-        "Scan result: %d findings, %d secrets",
-        len(result.findings), len(result.secrets),
-    )
+    if args.targets_file:
+        results = asyncio.run(run_scan_list(args.targets_file, config))
+        total_findings = sum(len(r.findings) for r in results)
+        total_secrets = sum(len(r.secrets) for r in results)
+        logger.info(
+            "Scan list complete: %d targets, %d findings, %d secrets",
+            len(results), total_findings, total_secrets,
+        )
+    else:
+        config.scan.target = args.target
+        result = asyncio.run(run_scan(args.target, config))
+        logger.info(
+            "Scan result: %d findings, %d secrets",
+            len(result.findings), len(result.secrets),
+        )
 
 
 if __name__ == "__main__":

@@ -30,7 +30,7 @@ async def run(
         "-json",
     ]
     logger.info("nuclei: scanning %d targets with %s", len(targets), templates)
-    result = await run_captured(cmd, input_data=input_data.encode())
+    result = await run_captured(cmd, stdin_data=input_data.encode())
     return parse_output(result.stdout)
 
 

@@ -16,7 +16,7 @@ async def run(urls: list[str], depth: int = 3) -> list[str]:
         "-em", "js,png,jpg,css",
     ]
     logger.info("katana: crawling %d urls to depth %d", len(urls), depth)
-    result = await run_captured(cmd, input_data=input_data.encode())
+    result = await run_captured(cmd, stdin_data=input_data.encode())
     return parse_output(result.stdout)
 
 

@@ -1,0 +1,4 @@
+﻿# targets list
+example.com
+test.com
+scanme.org

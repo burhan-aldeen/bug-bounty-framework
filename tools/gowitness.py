@@ -17,7 +17,7 @@ async def run(urls: list[str], output_dir: Path = Path("screenshots")) -> list[P
         "-P", str(output_dir),
     ]
     logger.info("gowitness: capturing %d urls", len(urls))
-    result = await run_captured(cmd, input_data=input_data.encode())
+    result = await run_captured(cmd, stdin_data=input_data.encode())
     return parse_output(result.stdout, output_dir)
 
 
