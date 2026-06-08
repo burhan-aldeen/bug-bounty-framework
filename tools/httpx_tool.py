@@ -9,7 +9,8 @@ logger = get_logger("tools.httpx")
 
 async def run(
     domains: list[str],
-    ports: str = "80,443,8080,8443,3000",
+    ports: str = "80,443",
+    extra_flags: list[str] | None = None,
 ) -> list[AliveHost]:
     require_tool("httpx")
     input_data = "\n".join(domains)
@@ -23,7 +24,12 @@ async def run(
         "-cdn",
         "-content-length",
         "-json",
+        "-timeout", "5",
+        "-retries", "1",
+        "-threads", "100",
     ]
+    if extra_flags:
+        cmd.extend(extra_flags)
     logger.info("httpx: probing %d hosts", len(domains))
     result = await run_captured(cmd, stdin_data=input_data.encode())
     return parse_output(result.stdout)

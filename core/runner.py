@@ -9,7 +9,7 @@ logger = get_logger("runner")
 
 _TOOL_TIMEOUTS: dict[str, int] = {
     "subfinder": 120,
-    "httpx": 300,
+    "httpx": 600,
     "nuclei": 300,
     "sqlmap": 600,
     "gau": 120,

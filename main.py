@@ -168,9 +168,10 @@ async def run_scan_list(targets_file: Path, config: Config, resume: bool = False
     # Phase 5 — Distribute findings + report
     # ----------------------------------------------------------------
     logger.info("=== PHASE 5: REPORT ===")
+    base_output_dir = config.scan.output_dir
     for i, result in enumerate(all_results):
         config.scan.target = targets[i]
-        output_dir = config.scan.output_dir / targets[i].replace(".", "_")
+        output_dir = base_output_dir / targets[i].replace(".", "_")
         config.scan.output_dir = output_dir
 
         result.findings = [f for f in all_hunt_findings if targets[i] in f.url or targets[i] in result.urls]
