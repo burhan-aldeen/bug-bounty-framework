@@ -37,14 +37,22 @@ async def run_scan(target: str, config: Config) -> ScanResult:
     return result
 
 
-async def run_scan_list(targets_file: Path, config: Config, fresh: bool = False, subs_list: Path | None = None) -> list[ScanResult]:
-    try:
-        lines = targets_file.read_text(encoding="utf-8-sig").strip().splitlines()
-    except OSError as exc:
-        logger.error("cannot read targets file %s: %s", targets_file, exc)
-        return []
-    targets = [line.strip() for line in lines if line.strip() and not line.strip().startswith("#")]
-    logger.info("scan list: %d targets from %s", len(targets), targets_file)
+async def run_scan_list(targets_file: Path | None, config: Config, fresh: bool = False, subs_list: Path | None = None) -> list[ScanResult]:
+    if subs_list and not targets_file:
+        raw = Path(subs_list).read_text(encoding="utf-8-sig").strip().splitlines()
+        raw = [s.strip().lower() for s in raw if s.strip()]
+        targets = sorted(set(".".join(s.split(".")[-2:]) for s in raw if s.count(".") >= 1))
+        if not targets:
+            targets = raw
+        logger.info("extracted %d root targets from %s", len(targets), subs_list)
+    else:
+        try:
+            lines = targets_file.read_text(encoding="utf-8-sig").strip().splitlines()
+        except OSError as exc:
+            logger.error("cannot read targets file %s: %s", targets_file, exc)
+            return []
+        targets = [line.strip() for line in lines if line.strip() and not line.strip().startswith("#")]
+        logger.info("scan list: %d targets from %s", len(targets), targets_file)
 
     cp_dir = config.scan.output_dir
     last_phase = checkpoint.completed_phase(cp_dir)
@@ -257,8 +265,8 @@ def main() -> None:
         logger.error("--authorized flag is required")
         sys.exit(2)
 
-    if not args.target and not args.targets_file:
-        logger.error("provide a target domain or --list file")
+    if not args.target and not args.targets_file and not args.subs_list:
+        logger.error("provide a target, --list, or --subs-list")
         sys.exit(2)
 
     configure_logging(args.log_file, args.log_level)
@@ -268,7 +276,7 @@ def main() -> None:
     config.scan.quick = args.quick
     config.scan.output_dir = args.output
 
-    if args.targets_file:
+    if args.targets_file or args.subs_list:
         results = asyncio.run(run_scan_list(args.targets_file, config, fresh=args.fresh, subs_list=args.subs_list))
         total_findings = sum(len(r.findings) for r in results)
         total_secrets = sum(len(r.secrets) for r in results)
