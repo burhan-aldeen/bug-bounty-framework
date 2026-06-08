@@ -27,7 +27,7 @@ async def run_scan(target: str, config: Config) -> ScanResult:
         secrets = await secrets_stage.run(result.alive_hosts, result.urls)
         result.secrets.extend(secrets)
 
-    report = await report_stage.run(result)
+    report = await report_stage.run(result, config=config)
     write_all(report, config.scan.output_dir)
 
     logger.info(
@@ -195,8 +195,11 @@ async def run_scan_list(targets_file: Path | None, config: Config, fresh: bool =
     for i, target in enumerate(targets):
         result = ScanResult(target=target)
         result.subdomains = all_subdomain_sets[i]
-        result.alive_hosts = [h for h in all_alive if target in h.url]
-        result.urls = [u for u in all_urls if target in u]
+        result.alive_hosts = [
+            h for h in all_alive
+            if target == _extract_root(h.url.split("://")[-1].split("/")[0])
+        ]
+        result.urls = [u for u in all_urls if target == _extract_root(u.split("://")[-1].split("/")[0])]
         all_results.append(result)
 
     # ----------------------------------------------------------------
@@ -245,11 +248,21 @@ async def run_scan_list(targets_file: Path | None, config: Config, fresh: bool =
         output_dir = base_output_dir / targets[i].replace(".", "_")
         config.scan.output_dir = output_dir
 
-        result.findings = [f for f in all_hunt_findings if targets[i] in f.url or targets[i] in result.urls]
-        result.findings.extend(f for f in all_api_findings if targets[i] in f.url or targets[i] in result.urls)
-        result.secrets = [s for s in all_secrets if targets[i] in s.url or targets[i] in result.urls]
+        tgt = targets[i]
+        result.findings = [
+            f for f in all_hunt_findings
+            if tgt in f.url or tgt in result.urls
+        ]
+        result.findings.extend(
+            f for f in all_api_findings
+            if tgt in f.url or tgt in result.urls
+        )
+        result.secrets = [
+            s for s in all_secrets
+            if tgt in s.url or tgt in result.urls
+        ]
 
-        report = await report_stage.run(result)
+        report = await report_stage.run(result, config=config)
         write_all(report, output_dir)
 
         logger.info(

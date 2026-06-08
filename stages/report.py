@@ -1,15 +1,22 @@
 from core.agent import generate_ai_summary
+from core.config import Config
 from core.logger import get_logger
 from core.models import Finding, Report, ScanResult, SecretFinding
 
 logger = get_logger("stages.report")
 
 
-async def run(result: ScanResult) -> Report:
+async def run(result: ScanResult, config: Config | None = None) -> Report:
     logger.info("stage=report target=%s", result.target)
 
     findings_text = _build_findings_text(result.findings, result.secrets)
-    ai_summary = await generate_ai_summary(findings_text)
+    cfg = config or Config()
+    ai_summary = await generate_ai_summary(
+        findings_text,
+        model=cfg.ollama.model or cfg.openai.model,
+        url=cfg.ollama.url,
+        api_key=cfg.openai.api_key,
+    )
 
     import datetime
     report = Report(

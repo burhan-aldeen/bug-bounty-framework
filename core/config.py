@@ -19,6 +19,13 @@ class OllamaConfig:
 
 
 @dataclass
+class OpenAIConfig:
+    api_key: str = ""
+    model: str = "gpt-4o-mini"
+    timeout_seconds: int = 60
+
+
+@dataclass
 class ScanConfig:
     target: str = ""
     authorized: bool = False
@@ -31,4 +38,5 @@ class ScanConfig:
 class Config:
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
     ollama: OllamaConfig = field(default_factory=OllamaConfig)
+    openai: OpenAIConfig = field(default_factory=OpenAIConfig)
     scan: ScanConfig = field(default_factory=ScanConfig)

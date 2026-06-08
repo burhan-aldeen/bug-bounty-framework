@@ -31,5 +31,5 @@ class TestAgent:
             assert result is None
 
     def test_prompt_constant(self) -> None:
-        from core.agent import OLLAMA_SUMMARIZE_PROMPT
-        assert "bug bounty" in OLLAMA_SUMMARIZE_PROMPT.lower()
+        from core.agent import SUMMARIZE_PROMPT
+        assert "bug bounty" in SUMMARIZE_PROMPT.lower()
