@@ -37,7 +37,7 @@ async def run_scan(target: str, config: Config) -> ScanResult:
     return result
 
 
-async def run_scan_list(targets_file: Path, config: Config, resume: bool = False) -> list[ScanResult]:
+async def run_scan_list(targets_file: Path, config: Config, fresh: bool = False) -> list[ScanResult]:
     try:
         lines = targets_file.read_text(encoding="utf-8-sig").strip().splitlines()
     except OSError as exc:
@@ -49,8 +49,14 @@ async def run_scan_list(targets_file: Path, config: Config, resume: bool = False
     cp_dir = config.scan.output_dir
     last_phase = checkpoint.completed_phase(cp_dir)
 
-    if resume and last_phase > 0:
-        logger.info("resuming from phase %d checkpoint", last_phase)
+    if fresh or last_phase == 0:
+        if last_phase > 0:
+            logger.info("--fresh: clearing checkpoints")
+            checkpoint.clear(cp_dir)
+        resume = False
+    else:
+        resume = True
+        logger.info("auto-resume from phase %d checkpoint", last_phase)
 
     # ----------------------------------------------------------------
     # Phase 1a — Subdomain enumeration: ALL targets first
@@ -187,7 +193,6 @@ async def run_scan_list(targets_file: Path, config: Config, resume: bool = False
             len(result.findings), len(result.secrets),
         )
 
-    checkpoint.clear(cp_dir)
     logger.info("=== ALL PHASES COMPLETE (%d targets) ===", len(targets))
     return all_results
 
@@ -211,8 +216,8 @@ def main() -> None:
                         help="Log file path")
     parser.add_argument("--log-level", default="INFO",
                         choices=["DEBUG", "INFO", "WARNING", "ERROR"])
-    parser.add_argument("--resume", action="store_true",
-                        help="Resume from last checkpoint")
+    parser.add_argument("--fresh", action="store_true",
+                        help="Ignore checkpoints and start fresh")
 
     args = parser.parse_args()
 
@@ -232,7 +237,7 @@ def main() -> None:
     config.scan.output_dir = args.output
 
     if args.targets_file:
-        results = asyncio.run(run_scan_list(args.targets_file, config, resume=args.resume))
+        results = asyncio.run(run_scan_list(args.targets_file, config, fresh=args.fresh))
         total_findings = sum(len(r.findings) for r in results)
         total_secrets = sum(len(r.secrets) for r in results)
         logger.info(
