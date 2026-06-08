@@ -2,7 +2,7 @@ import asyncio
 
 from core.logger import get_logger
 from core.models import AliveHost, ScanResult, Subdomain
-from tools import subfinder, httpx_tool, gau, katana, gospider
+from tools import amass, subfinder, httpx_tool, gau, katana, gospider, crtsh, sublist3r
 
 logger = get_logger("stages.recon")
 
@@ -47,9 +47,21 @@ async def collect_urls(domain: str, hosts: list[AliveHost]) -> list[str]:
     return await _collect_urls(domain, hosts)
 
 
+async def run_amass(domains: list[str]) -> list[Subdomain]:
+    logger.debug("recon/amass: %d root domains", len(domains))
+    try:
+        return await amass.run(domains)
+    except FileNotFoundError:
+        logger.warning("amass not installed, skipping")
+        return []
+    except Exception as exc:
+        logger.warning("amass failed: %s", exc)
+        return []
+
+
 async def _enumerate_subdomains(domain: str) -> list[Subdomain]:
     tasks = []
-    for tool_fn in [subfinder.run]:
+    for tool_fn in [subfinder.run, crtsh.run, sublist3r.run]:
         tasks.append(_safe_run(tool_fn, domain))
 
     results = await asyncio.gather(*tasks, return_exceptions=True)

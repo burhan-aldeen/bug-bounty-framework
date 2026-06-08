@@ -37,7 +37,7 @@ async def run_scan(target: str, config: Config) -> ScanResult:
     return result
 
 
-async def run_scan_list(targets_file: Path, config: Config, fresh: bool = False) -> list[ScanResult]:
+async def run_scan_list(targets_file: Path, config: Config, fresh: bool = False, subs_list: Path | None = None) -> list[ScanResult]:
     try:
         lines = targets_file.read_text(encoding="utf-8-sig").strip().splitlines()
     except OSError as exc:
@@ -61,7 +61,7 @@ async def run_scan_list(targets_file: Path, config: Config, fresh: bool = False)
     # ----------------------------------------------------------------
     # Phase 1a — Subdomain enumeration: ALL targets first
     # ----------------------------------------------------------------
-    if resume and last_phase >= 1:
+    if resume and last_phase >= 1 and not subs_list:
         raw = checkpoint.load_phase(cp_dir, 1, "1a_subdomains")
         all_subdomain_sets = checkpoint.rebuild_subdomains(raw) if raw else []
         if not all_subdomain_sets:
@@ -70,10 +70,40 @@ async def run_scan_list(targets_file: Path, config: Config, fresh: bool = False)
     if not resume or last_phase < 1:
         logger.info("=== PHASE 1a: SUBDOMAIN ENUMERATION (%d targets) ===", len(targets))
         all_subdomain_sets: list[list[Subdomain]] = []
-        for i, target in enumerate(targets, 1):
-            logger.info("enum [%d/%d]: %s", i, len(targets), target)
-            subs = await recon.enumerate_subdomains(target)
-            all_subdomain_sets.append(subs)
+
+        if subs_list:
+            raw_subs = Path(subs_list).read_text(encoding="utf-8-sig").strip().splitlines()
+            raw_subs = [s.strip().lower() for s in raw_subs if s.strip()]
+            for target in targets:
+                target_subs = [Subdomain(domain=s, source="user_list") for s in raw_subs if s.endswith(f".{target}") or s == target]
+                if not target_subs:
+                    target_subs = [Subdomain(domain=s, source="user_list") for s in raw_subs if target in s]
+                all_subdomain_sets.append(target_subs)
+            logger.info("loaded %d subdomains from %s", len(raw_subs), subs_list)
+        else:
+            for i, target in enumerate(targets, 1):
+                logger.info("enum [%d/%d]: %s", i, len(targets), target)
+                subs = await recon.enumerate_subdomains(target)
+                all_subdomain_sets.append(subs)
+
+            amass_subs = await recon.run_amass(targets)
+            if amass_subs:
+                logger.info("distributing %d amass results to targets", len(amass_subs))
+                for s in amass_subs:
+                    for i, target in enumerate(targets):
+                        if s.domain.endswith(f".{target}") or s.domain == target:
+                            seen = set(sub.domain for sub in all_subdomain_sets[i])
+                            if s.domain not in seen:
+                                all_subdomain_sets[i].append(s)
+                            break
+
+        all_unique = sorted(set(s.domain for subs in all_subdomain_sets for s in subs))
+        output_dir = config.scan.output_dir
+        output_dir.mkdir(parents=True, exist_ok=True)
+        found_path = output_dir / "found_list.txt"
+        found_path.write_text("\n".join(all_unique))
+        logger.info("saved %d unique subdomains to %s", len(all_unique), found_path)
+
         checkpoint.save_phase(cp_dir, 1, "1a_subdomains", all_subdomain_sets)
 
     # ----------------------------------------------------------------
@@ -218,6 +248,8 @@ def main() -> None:
                         choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     parser.add_argument("--fresh", action="store_true",
                         help="Ignore checkpoints and start fresh")
+    parser.add_argument("--subs-list", type=Path, dest="subs_list",
+                        help="Skip enumeration, load subdomains from file")
 
     args = parser.parse_args()
 
@@ -237,7 +269,7 @@ def main() -> None:
     config.scan.output_dir = args.output
 
     if args.targets_file:
-        results = asyncio.run(run_scan_list(args.targets_file, config, fresh=args.fresh))
+        results = asyncio.run(run_scan_list(args.targets_file, config, fresh=args.fresh, subs_list=args.subs_list))
         total_findings = sum(len(r.findings) for r in results)
         total_secrets = sum(len(r.secrets) for r in results)
         logger.info(
