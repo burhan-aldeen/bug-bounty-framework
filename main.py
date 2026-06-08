@@ -37,11 +37,33 @@ async def run_scan(target: str, config: Config) -> ScanResult:
     return result
 
 
+_TWO_PART_TLDS = frozenset({
+    "com.sa", "com.kw", "com.tr", "com.ae", "com.eg", "com.qa", "com.om",
+    "com.bh", "com.lb", "com.jo", "com.pk", "com.bd", "com.lk", "com.np",
+    "co.uk", "co.jp", "co.kr", "co.nz", "co.in", "co.za", "co.il",
+    "com.cn", "net.cn", "org.cn", "com.hk", "com.tw", "com.mx",
+    "com.ar", "com.br", "com.au", "com.sg", "com.my", "com.ph",
+    "org.uk", "ac.uk", "gov.uk", "net.uk",
+    "org.sa", "net.sa", "gov.sa",
+})
+
+
+def _extract_root(domain: str) -> str:
+    parts = domain.strip().lower().split(".")
+    if len(parts) < 2:
+        return domain
+    if len(parts) >= 3 and ".".join(parts[-2:]) in _TWO_PART_TLDS:
+        return ".".join(parts[-3:])
+    if len(parts) >= 2:
+        return ".".join(parts[-2:])
+    return domain
+
+
 async def run_scan_list(targets_file: Path | None, config: Config, fresh: bool = False, subs_list: Path | None = None) -> list[ScanResult]:
     if subs_list and not targets_file:
         raw = Path(subs_list).read_text(encoding="utf-8-sig").strip().splitlines()
         raw = [s.strip().lower() for s in raw if s.strip()]
-        targets = sorted(set(".".join(s.split(".")[-2:]) for s in raw if s.count(".") >= 1))
+        targets = sorted(set(_extract_root(s) for s in raw if s.count(".") >= 1))
         if not targets:
             targets = raw
         logger.info("extracted %d root targets from %s", len(targets), subs_list)
