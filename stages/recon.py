@@ -8,7 +8,7 @@ from tools import amass, subfinder, httpx_tool, gau, katana, gospider, crtsh, su
 logger = get_logger("stages.recon")
 
 
-async def run(domain: str) -> ScanResult:
+async def run(domain: str, output_dir: Path | None = None) -> ScanResult:
     result = ScanResult(target=domain)
     logger.info("stage=recon target=%s", domain)
 
@@ -17,10 +17,10 @@ async def run(domain: str) -> ScanResult:
 
     if subdomains:
         domains = list(dict.fromkeys(s.domain for s in subdomains))
-        result.alive_hosts = await _check_alive(domains)
+        result.alive_hosts = await _check_alive(domains, output_dir)
     else:
         logger.warning("recon: no subdomains found, trying root domain")
-        result.alive_hosts = await _check_alive([domain])
+        result.alive_hosts = await _check_alive([domain], output_dir)
 
     result.urls = await _collect_urls(domain, result.alive_hosts)
 

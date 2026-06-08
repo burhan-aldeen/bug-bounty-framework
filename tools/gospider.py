@@ -8,16 +8,23 @@ logger = get_logger("tools.gospider")
 
 async def run(urls: list[str]) -> list[str]:
     require_tool("gospider")
-    urls_str = "\n".join(urls) if len(urls) > 1 else urls[0]
+    import tempfile, os
+    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False)
+    for u in urls:
+        tmp.write(u + "\n")
+    tmp.close()
     cmd = [
         "gospider",
-        "-s", urls_str,
+        "-S", tmp.name,
         "-t", "20",
         "--json",
     ]
     logger.info("gospider: crawling %d urls", len(urls))
-    result = await run_captured(cmd)
-    return parse_output(result.stdout)
+    try:
+        result = await run_captured(cmd)
+        return parse_output(result.stdout)
+    finally:
+        os.unlink(tmp.name)
 
 
 def parse_output(stdout: str) -> list[str]:

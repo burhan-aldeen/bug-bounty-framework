@@ -15,7 +15,7 @@ logger = get_logger("main")
 async def run_scan(target: str, config: Config) -> ScanResult:
     logger.info("scan starting target=%s", target)
 
-    result = await recon.run(target)
+    result = await recon.run(target, output_dir=config.scan.output_dir)
 
     if result.subdomains or result.alive_hosts:
         hunt_findings = await hunt.run(result.urls)
@@ -173,9 +173,14 @@ async def run_scan_list(targets_file: Path | None, config: Config, fresh: bool =
         all_urls: list[str] = []
         seen_urls: set[str] = set()
         for i, target in enumerate(targets):
-            host_urls = [h for h in all_alive if target in h.url]
+            host_urls = [
+                h for h in all_alive
+                if target == _extract_root(h.url.split("://")[-1].split("/")[0])
+            ]
             if not host_urls:
-                host_urls = all_alive
+                logger.info("no alive hosts matched for %s, skipping URL collection", target)
+                continue
+            logger.info("target %s: %d alive hosts → collecting URLs", target, len(host_urls))
             urls = await recon.collect_urls(target, host_urls)
             for u in urls:
                 if u not in seen_urls:
