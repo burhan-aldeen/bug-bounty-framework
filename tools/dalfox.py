@@ -1,5 +1,3 @@
-import json
-
 from core.logger import get_logger
 from core.models import Finding, FindingType, Severity
 from core.runner import run_captured, require_tool
@@ -9,22 +7,22 @@ logger = get_logger("tools.dalfox")
 
 async def run(urls: list[str]) -> list[Finding]:
     require_tool("dalfox")
-    input_data = "\n".join(urls)
+    if not urls:
+        return []
+    input_data = "\n".join(urls).encode("utf-8")
     cmd = [
-        "dalfox",
-        "pipe",
-        "--skip-bav",
-        "--skip-mining-all",
+        "dalfox", "pipe",
+        "--skip-bav", "--skip-mining-all",
         "--waf-evasion",
-        "--json",
     ]
     logger.info("dalfox: scanning %d urls", len(urls))
-    result = await run_captured(cmd, stdin_data=input_data.encode())
+    result = await run_captured(cmd, stdin_data=input_data)
     return parse_output(result.stdout)
 
 
 def parse_output(stdout: str) -> list[Finding]:
-    findings = []
+    import json
+    findings: list[Finding] = []
     for line in stdout.strip().splitlines():
         line = line.strip()
         if not line:
@@ -34,17 +32,17 @@ def parse_output(stdout: str) -> list[Finding]:
             findings.append(
                 Finding(
                     finding_type=FindingType.XSS,
-                    url=data.get("url", ""),
-                    parameter=data.get("param", None),
-                    payload=data.get("payload", None),
-                    confidence=data.get("confidence", 0.5),
-                    detail=data.get("message", ""),
+                    url=data.get("data", ""),
+                    parameter=data.get("param", ""),
+                    payload=data.get("payload", ""),
                     severity=Severity.HIGH,
+                    confidence=data.get("confidence", 0.8),
+                    detail=f"XSS: {data.get('evidence', '')}",
                 )
             )
-        except (json.JSONDecodeError, KeyError) as exc:
-            logger.warning("dalfox: failed to parse line: %s", exc)
+        except json.JSONDecodeError:
+            continue
     if not findings:
-        logger.warning("dalfox: no XSS findings")
-    logger.info("dalfox: %d XSS findings", len(findings))
+        logger.warning("dalfox: no findings")
+    logger.info("dalfox: %d findings", len(findings))
     return findings

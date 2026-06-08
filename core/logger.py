@@ -5,7 +5,6 @@ from logging.handlers import QueueHandler, QueueListener, RotatingFileHandler
 from pathlib import Path
 from queue import Queue
 
-
 _LOGGER_INITIALIZED: bool = False
 _listener: QueueListener | None = None
 
@@ -31,7 +30,7 @@ def configure_logging(log_file: Path | str = "scan.log", level: str = "INFO") ->
 
     stream_handler = logging.StreamHandler(sys.stderr)
     stream_handler.setFormatter(formatter)
-    stream_handler.setLevel(logging.DEBUG)
+    stream_handler.setLevel(getattr(logging, level.upper(), logging.INFO))
 
     file_handler = RotatingFileHandler(
         str(log_path), maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8"

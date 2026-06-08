@@ -7,57 +7,46 @@ from pathlib import Path
 
 from core.logger import get_logger
 from core.models import AliveHost
+from core.runner import run_captured
 
 logger = get_logger("tools.httpx")
 
+_HTTPX_FLAGS = [
+    "-silent",
+    "-ports", "80,443,8080,8443,3000",
+    "-status-code", "-title", "-tech-detect", "-cdn",
+    "-json",
+]
 _HTTPX_TIMEOUT = 600
 
 
 async def run(
     domains: list[str],
-    ports: str = "80,443",
     output_dir: Path | None = None,
 ) -> list[AliveHost]:
-    executable = shutil.which("httpx")
+    tool = "httpx"
+    executable = shutil.which(tool)
     if executable is None:
-        raise FileNotFoundError("tool not installed: httpx")
-
-    cmd = [
-        "httpx",
-        "-silent",
-        "-ports", ports,
-        "-status-code",
-        "-title",
-        "-location",
-        "-server",
-        "-cname",
-        "-follow-redirects",
-        "-tech-detect",
-        "-json",
-        "-timeout", "5",
-        "-retries", "1",
-        "-threads", "200",
-        "--ip",
-    ]
+        logger.warning("httpx not installed, skipping")
+        return []
 
     tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False)
-    tmp_path = Path(tmp.name)
-    out_lines: list[str] = []
-    save_path = (output_dir / "httpx_results.txt") if output_dir else None
-
     try:
         tmp.write("\n".join(domains))
         tmp.close()
-        cmd.extend(["-l", str(tmp_path)])
+
+        cmd = [executable] + _HTTPX_FLAGS + ["-l", tmp.name]
         logger.info("httpx: probing %d hosts", len(domains))
-        logger.info("running: %s", " ".join(cmd))
 
         process = await asyncio.create_subprocess_exec(
-            executable,
-            *cmd[1:],
+            *cmd,
+            stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
+
+        out_lines: list[str] = []
+        buf = getattr(sys.stdout, "buffer", None)
 
         while True:
             line_bytes = await process.stdout.readline()
@@ -65,7 +54,6 @@ async def run(
                 break
             line = line_bytes.decode("utf-8", errors="replace").rstrip()
             if line:
-                buf = getattr(sys.stdout, "buffer", None)
                 try:
                     if buf:
                         buf.write((line + "\n").encode("utf-8"))
@@ -74,46 +62,53 @@ async def run(
                     pass
                 out_lines.append(line)
 
+        stderr = await process.stderr.read()
         await asyncio.wait_for(process.wait(), timeout=_HTTPX_TIMEOUT)
 
+        stdout = "\n".join(out_lines)
+
+        if output_dir:
+            save_path = output_dir / "httpx_results.txt"
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            save_path.write_text(stdout, encoding="utf-8")
+            logger.info("httpx results saved to %s (%d lines)", save_path, len(out_lines))
+
+        result = parse_output(stdout)
+        logger.info("httpx: %d hosts alive", len(result))
+        return result
+
     except TimeoutError:
-        logger.warning("httpx timed out after %ds", _HTTPX_TIMEOUT)
+        logger.warning("httpx timed out")
+        return []
+    except Exception as exc:
+        logger.warning("httpx failed: %s", exc)
+        return []
     finally:
-        if tmp_path.exists():
-            tmp_path.unlink(missing_ok=True)
-
-    stdout = "\n".join(out_lines)
-
-    if save_path:
-        save_path.parent.mkdir(parents=True, exist_ok=True)
-        save_path.write_text(stdout, encoding="utf-8")
-        logger.info("httpx results saved to %s (%d lines)", save_path, len(out_lines))
-
-    return parse_output(stdout)
+        Path(tmp.name).unlink(missing_ok=True)
 
 
 def parse_output(stdout: str) -> list[AliveHost]:
-    hosts = []
+    hosts: list[AliveHost] = []
     for line in stdout.strip().splitlines():
         line = line.strip()
         if not line:
             continue
         try:
             data = json.loads(line)
-            hosts.append(
-                AliveHost(
-                    url=data.get("url", ""),
-                    status_code=data.get("status_code", 0),
-                    title=data.get("title", ""),
-                    tech=data.get("tech", []) or [],
-                    cdn=bool(data.get("cdn", False)),
-                    content_length=data.get("content_length", 0),
-                    headers=data.get("headers", {}),
-                )
+            host = AliveHost(
+                url=data.get("url", ""),
+                status_code=data.get("status_code", 0),
+                title=data.get("title", ""),
+                tech=data.get("tech", []),
+                cdn=data.get("cdn", False),
+                content_length=data.get("content_length", 0),
+                headers=data.get("headers", {}),
             )
-        except (json.JSONDecodeError, KeyError) as exc:
-            logger.warning("httpx: failed to parse line: %s", exc)
-    if not hosts:
-        logger.warning("httpx: no alive hosts found")
-    logger.info("httpx: %d hosts alive", len(hosts))
+            if data.get("a"):
+                host.ip = data["a"][0] if isinstance(data["a"], list) else data["a"]
+            if data.get("cname"):
+                host.cname = data["cname"][0] if isinstance(data["cname"], list) else data["cname"]
+            hosts.append(host)
+        except json.JSONDecodeError:
+            continue
     return hosts

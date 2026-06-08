@@ -3,19 +3,20 @@ from pathlib import Path
 
 
 @dataclass
-class RuntimeConfig:
-    concurrency: int = 5
-    timeout_seconds: int = 60
-    retries: int = 2
-    per_host_delay: float = 1.0
+class ScanConfig:
+    target: str = ""
+    authorized: bool = False
+    quick: bool = False
+    output_dir: Path = Path("output")
+    subs_list: Path | None = None
+    targets_file: Path | None = None
 
 
 @dataclass
 class OllamaConfig:
     url: str = "http://localhost:11434"
-    model: str = "qwen3.5:9b"
-    timeout_seconds: int = 120
-    enabled: bool = True
+    model: str = "llama3.2"
+    timeout_seconds: int = 60
 
 
 @dataclass
@@ -26,17 +27,7 @@ class OpenAIConfig:
 
 
 @dataclass
-class ScanConfig:
-    target: str = ""
-    authorized: bool = False
-    quick: bool = False
-    output_dir: Path = Path("output")
-    subdomains_file: Path | None = None
-
-
-@dataclass
 class Config:
-    runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
+    scan: ScanConfig = field(default_factory=ScanConfig)
     ollama: OllamaConfig = field(default_factory=OllamaConfig)
     openai: OpenAIConfig = field(default_factory=OpenAIConfig)
-    scan: ScanConfig = field(default_factory=ScanConfig)

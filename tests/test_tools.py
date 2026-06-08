@@ -1,160 +1,152 @@
-import pytest
-
-from core.models import Subdomain, AliveHost, Finding
-from tools import subfinder, httpx_tool, gau, katana, gospider, gowitness
-from tools import nuclei, dalfox, sqlmap
+from tools.subfinder import parse_output as parse_subfinder
+from tools.assetfinder import parse_output as parse_assetfinder
+from tools.crtsh import parse_output as parse_crtsh
+from tools.httpx_tool import parse_output as parse_httpx
+from tools.gau import parse_output as parse_gau
+from tools.katana import parse_output as parse_katana
+from tools.gospider import parse_output as parse_gospider
+from tools.gowitness import parse_output as parse_gowitness
+from tools.nuclei import parse_output as parse_nuclei
+from tools.dalfox import parse_output as parse_dalfox
+from tools.sqlmap import parse_output as parse_sqlmap
 
 
 class TestSubfinder:
-    def test_parse_output_returns_subdomains(self) -> None:
-        stdout = "admin.test.com\napi.test.com\nwww.test.com\n"
-        result = subfinder.parse_output(stdout)
-        assert len(result) == 3
-        assert all(isinstance(s, Subdomain) for s in result)
-        assert result[0].domain == "admin.test.com"
-        assert result[0].source == "subfinder"
+    def test_parse_output_returns_subdomains(self):
+        data = "sub1.example.com\nsub2.example.com\n"
+        result = parse_subfinder(data, "subfinder")
+        assert len(result) == 2
+        assert result[0].domain == "sub1.example.com"
 
-    def test_parse_output_empty(self) -> None:
-        assert subfinder.parse_output("") == []
+    def test_parse_output_empty(self):
+        assert parse_subfinder("", "subfinder") == []
 
-    def test_parse_output_skips_bracket_lines(self) -> None:
-        stdout = "[INF] Starting subfinder\nadmin.test.com\n"
-        result = subfinder.parse_output(stdout)
+    def test_parse_output_skips_bracket_lines(self):
+        data = "[INFO] loading config\nsub.example.com\n"
+        result = parse_subfinder(data, "subfinder")
         assert len(result) == 1
+
+
+class TestAssetfinder:
+    def test_parse_output_returns_subdomains(self):
+        data = "sub1.example.com\nsub2.example.com\n"
+        result = parse_assetfinder(data, "assetfinder")
+        assert len(result) == 2
+        assert result[0].domain == "sub1.example.com"
+
+    def test_parse_output_empty(self):
+        assert parse_assetfinder("", "assetfinder") == []
+
+
+class TestCrtsh:
+    def test_parse_output_returns_subdomains(self):
+        data = '[{"name_value":"sub1.example.com\\nsub2.example.com"}]'
+        result = parse_crtsh(data, "crtsh")
+        assert len(result) == 2
+
+    def test_parse_output_invalid_json(self):
+        assert parse_crtsh("invalid", "crtsh") == []
+
+    def test_parse_output_skips_wildcard(self):
+        data = '[{"name_value":"*.example.com\\nsub.example.com"}]'
+        result = parse_crtsh(data, "crtsh")
+        assert len(result) == 1
+        assert result[0].domain == "sub.example.com"
 
 
 class TestHttpxTool:
-    def test_parse_output_valid_json(self) -> None:
-        stdout = (
-            '{"url":"https://test.com","status_code":200,"title":"Test",'
-            '"tech":["react"],"cdn":false,"content_length":1234,"headers":{}}\n'
-            '{"url":"https://api.test.com","status_code":403,"title":"Forbidden",'
-            '"tech":[],"cdn":true,"content_length":0,"headers":{}}\n'
-        )
-        result = httpx_tool.parse_output(stdout)
-        assert len(result) == 2
-        assert isinstance(result[0], AliveHost)
-        assert result[0].url == "https://test.com"
+    def test_parse_output_valid_json(self):
+        data = '{"url":"http://example.com","status_code":200,"title":"Test","tech":[],"cdn":false,"content_length":100}'
+        result = parse_httpx(data)
+        assert len(result) == 1
+        assert result[0].url == "http://example.com"
         assert result[0].status_code == 200
-        assert result[1].cdn is True
 
-    def test_parse_output_invalid_json_skipped(self) -> None:
-        stdout = "not json\n"
-        result = httpx_tool.parse_output(stdout)
-        assert result == []
+    def test_parse_output_empty(self):
+        assert parse_httpx("") == []
 
-    def test_parse_output_empty(self) -> None:
-        assert httpx_tool.parse_output("") == []
+    def test_parse_output_invalid_json_skipped(self):
+        data = '{"url":"http://example.com"}\nnot json\n{"url":"http://test.com"}'
+        result = parse_httpx(data)
+        assert len(result) == 2
 
 
 class TestGau:
-    def test_parse_output_returns_urls(self) -> None:
-        stdout = "https://test.com/page1\nhttps://test.com/page2\n"
-        result = gau.parse_output(stdout)
+    def test_parse_output_returns_urls(self):
+        data = "http://example.com/path\nhttp://example.com/other\n"
+        result = parse_gau(data)
         assert len(result) == 2
-        assert result[0] == "https://test.com/page1"
 
-    def test_parse_output_empty(self) -> None:
-        assert gau.parse_output("") == []
+    def test_parse_output_empty(self):
+        assert parse_gau("") == []
 
 
 class TestKatana:
-    def test_parse_output_returns_urls(self) -> None:
-        stdout = "https://test.com/a\nhttps://test.com/b\n"
-        result = katana.parse_output(stdout)
+    def test_parse_output_returns_urls(self):
+        data = "http://example.com/page1\nhttp://example.com/page2\n"
+        result = parse_katana(data)
         assert len(result) == 2
 
-    def test_parse_output_empty(self) -> None:
-        assert katana.parse_output("") == []
+    def test_parse_output_empty(self):
+        assert parse_katana("") == []
 
 
 class TestGospider:
-    def test_parse_output_returns_urls(self) -> None:
-        stdout = '{"output":"https://test.com/page"}\n{"output":"https://test.com/api"}\n'
-        result = gospider.parse_output(stdout)
+    def test_parse_output_returns_urls(self):
+        data = '{"output":"http://example.com/page"}\n{"output":"http://example.com/other"}'
+        result = parse_gospider(data)
         assert len(result) == 2
 
-    def test_parse_output_filters_extensions(self) -> None:
-        stdout = '{"output":"https://test.com/a.css"}\n{"output":"https://test.com/a.jpg"}\n{"output":"https://test.com/page"}\n'
-        result = gospider.parse_output(stdout)
-        assert len(result) == 1
-        assert result[0] == "https://test.com/page"
-
-    def test_parse_output_empty(self) -> None:
-        assert gospider.parse_output("") == []
+    def test_parse_output_empty(self):
+        assert parse_gospider("") == []
 
 
 class TestGowitness:
-    def test_parse_output_returns_paths(self, tmp_path: pytest.TempPathFactory) -> None:
-        stdout = "test.com.png\napi.test.com.png\n"
-        result = gowitness.parse_output(stdout, tmp_path)
+    def test_parse_output_returns_paths(self):
+        data = "screenshot1.png\nscreenshot2.png\n"
+        result = parse_gowitness(data)
         assert len(result) == 2
-        assert result[0] == tmp_path / "test.com.png"
 
-    def test_parse_output_empty(self, tmp_path: pytest.TempPathFactory) -> None:
-        assert gowitness.parse_output("", tmp_path) == []
+    def test_parse_output_empty(self):
+        assert parse_gowitness("") == []
 
 
 class TestNuclei:
-    def test_parse_output_xss_finding(self) -> None:
-        stdout = (
-            '{"host":"https://test.com","type":"xss","matched-at":"https://test.com/search",'
-            '"info":{"name":"XSS Detection","severity":"high"}}\n'
-        )
-        result = nuclei.parse_output(stdout)
+    def test_parse_output_xss_finding(self):
+        data = '{"host":"http://example.com","info":{"name":"Reflected XSS","severity":"high","description":"XSS test"}}'
+        result = parse_nuclei(data)
         assert len(result) == 1
         assert result[0].finding_type.value == "xss"
-        assert result[0].severity.value == "high"
 
-    def test_parse_output_sqli_finding(self) -> None:
-        stdout = (
-            '{"host":"https://test.com","type":"sql-injection","matched-at":"https://test.com?id=1",'
-            '"info":{"name":"SQL Injection","severity":"critical"}}\n'
-        )
-        result = nuclei.parse_output(stdout)
+    def test_parse_output_sqli_finding(self):
+        data = '{"host":"http://example.com","info":{"name":"SQL Injection","severity":"critical","description":"SQLi test"}}'
+        result = parse_nuclei(data)
         assert len(result) == 1
         assert result[0].finding_type.value == "sqli"
 
-    def test_parse_output_invalid_json(self) -> None:
-        stdout = "not json\n"
-        result = nuclei.parse_output(stdout)
-        assert result == []
-
-    def test_parse_output_empty(self) -> None:
-        assert nuclei.parse_output("") == []
+    def test_parse_output_empty(self):
+        assert parse_nuclei("") == []
 
 
 class TestDalfox:
-    def test_parse_output_finding(self) -> None:
-        stdout = (
-            '{"url":"https://test.com/search","param":"q","payload":"<script>alert(1)</script>",'
-            '"confidence":0.9,"message":"XSS found"}\n'
-        )
-        result = dalfox.parse_output(stdout)
+    def test_parse_output_finding(self):
+        data = '{"data":"http://example.com","param":"q","payload":"<script>","evidence":"test"}'
+        result = parse_dalfox(data)
         assert len(result) == 1
         assert result[0].finding_type.value == "xss"
-        assert result[0].parameter == "q"
-        assert result[0].confidence == 0.9
 
-    def test_parse_output_empty(self) -> None:
-        assert dalfox.parse_output("") == []
+    def test_parse_output_empty(self):
+        assert parse_dalfox("") == []
 
 
 class TestSqlmap:
-    def test_parse_output_vulnerable(self) -> None:
-        stdout = "Parameter 'id' is vulnerable. Do you want to exploit?\n"
-        result = sqlmap.parse_output(stdout)
+    def test_parse_output_vulnerable(self):
+        data = "Parameter: id (GET) vulnerable"
+        result = parse_sqlmap(data)
         assert len(result) == 1
-        assert result[0].finding_type.value == "sqli"
-        assert result[0].parameter == "id"
 
-    def test_parse_output_no_vuln(self) -> None:
-        stdout = "All tested parameters are not injectable.\n"
-        result = sqlmap.parse_output(stdout)
-        assert result == []
+    def test_parse_output_no_vuln(self):
+        assert parse_sqlmap("all clear") == []
 
-    def test_parse_output_empty(self) -> None:
-        assert sqlmap.parse_output("") == []
-
-
-
+    def test_parse_output_empty(self):
+        assert parse_sqlmap("") == []

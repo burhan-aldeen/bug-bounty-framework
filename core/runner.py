@@ -1,6 +1,5 @@
 import asyncio
 import shutil
-from collections.abc import Coroutine
 
 from core.logger import get_logger
 from core.models import ToolResult
@@ -17,6 +16,10 @@ _TOOL_TIMEOUTS: dict[str, int] = {
     "gospider": 300,
     "dalfox": 300,
     "gowitness": 300,
+    "assetfinder": 120,
+    "amass": 300,
+    "waybackurls": 120,
+    "tplmap": 300,
 }
 
 
@@ -64,30 +67,17 @@ async def run_captured(
         return result
     except TimeoutError:
         logger.warning("tool timed out: %s", tool)
-        return ToolResult(
-            tool=tool, returncode=124, stdout="", stderr="timeout"
-        )
+        return ToolResult(tool=tool, returncode=124, stdout="", stderr="timeout")
     except OSError as exc:
         logger.warning("tool failed to start: %s: %s", tool, exc)
-        return ToolResult(
-            tool=tool, returncode=126, stdout="", stderr=str(exc)
-        )
+        return ToolResult(tool=tool, returncode=126, stdout="", stderr=str(exc))
 
 
-async def run_live(
-    command: list[str], timeout: int | None = None
-) -> ToolResult:
-    return await run_captured(command, timeout)
-
-
-async def run_concurrent(
-    coros: list[Coroutine], limit: int = 5
-) -> list[ToolResult]:
-    semaphore = asyncio.Semaphore(limit)
-
-    async def limited(coro: Coroutine) -> ToolResult:
-        async with semaphore:
-            return await coro
-
-    tasks = [limited(c) for c in coros]
-    return await asyncio.gather(*tasks, return_exceptions=False)
+def anew_merge(new_lines: list[str], existing: set[str]) -> list[str]:
+    added: list[str] = []
+    for line in new_lines:
+        line = line.strip()
+        if line and line not in existing:
+            existing.add(line)
+            added.append(line)
+    return added

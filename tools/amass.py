@@ -8,34 +8,33 @@ from core.runner import run_captured, require_tool
 logger = get_logger("tools.amass")
 
 
-async def run(domains: list[str]) -> list[Subdomain]:
+async def run(domain: str) -> list[Subdomain]:
     require_tool("amass")
     tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False)
-    tmp_path = Path(tmp.name)
+    tmp.close()
     try:
-        tmp.write("\n".join(domains))
-        tmp.close()
-        cmd = [
-            "amass", "enum",
-            "-passive",
-            "-norecursive",
-            "-noalts",
-            "-df", str(tmp_path),
-        ]
-        logger.info("amass: enumerating %d root domains", len(domains))
+        cmd = ["amass", "enum", "-passive", "-d", domain, "-o", tmp.name]
+        logger.info("amass: enumerating %s", domain)
         result = await run_captured(cmd)
+        output_path = Path(tmp.name)
+        stdout = ""
+        if output_path.exists() and output_path.stat().st_size > 0:
+            stdout = output_path.read_text(encoding="utf-8", errors="replace")
+        if not stdout.strip():
+            stdout = result.stdout
+        return parse_output(stdout, "amass")
     finally:
-        if tmp_path.exists():
-            tmp_path.unlink(missing_ok=True)
-    return parse_output(result.stdout, "amass")
+        Path(tmp.name).unlink(missing_ok=True)
 
 
 def parse_output(stdout: str, source: str = "amass") -> list[Subdomain]:
-    seen: set[str] = set()
     subs: list[Subdomain] = []
+    seen: set[str] = set()
     for line in stdout.strip().splitlines():
         line = line.strip().lower()
-        if line and line not in seen:
+        if not line:
+            continue
+        if line not in seen:
             seen.add(line)
             subs.append(Subdomain(domain=line, source=source))
     if not subs:

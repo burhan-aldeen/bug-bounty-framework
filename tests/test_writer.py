@@ -1,5 +1,6 @@
 import datetime
 import json
+from pathlib import Path
 
 import pytest
 
@@ -34,7 +35,7 @@ def sample_report() -> Report:
         secrets=[
             SecretFinding(
                 url="https://test.com/.env",
-                secret_type=SecretType.ENV_FILE,
+                secret_type=SecretType.ENV_EXPOSED,
                 match="DB_PASSWORD=secret123",
                 severity=Severity.CRITICAL,
             ),
@@ -44,7 +45,7 @@ def sample_report() -> Report:
 
 
 class TestWriter:
-    def test_write_json(self, sample_report: Report, tmp_path: pytest.TempPathFactory) -> None:
+    def test_write_json(self, sample_report: Report, tmp_path: Path) -> None:
         path = write_json(sample_report, tmp_path)
         assert path.exists()
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -52,15 +53,15 @@ class TestWriter:
         assert len(data["findings"]) == 2
         assert data["ai_summary"] == "Test AI summary"
 
-    def test_write_csv(self, sample_report: Report, tmp_path: pytest.TempPathFactory) -> None:
+    def test_write_csv(self, sample_report: Report, tmp_path: Path) -> None:
         path = write_csv(sample_report, tmp_path)
         assert path.exists()
         content = path.read_text(encoding="utf-8")
-        assert "Type,URL,Parameter" in content
-        assert "xss" in content
-        assert "sqli" in content
+        assert "Vulnerability,URL,Payload,Impact" in content
+        assert "XSS" in content
+        assert "SQLI" in content
 
-    def test_write_md(self, sample_report: Report, tmp_path: pytest.TempPathFactory) -> None:
+    def test_write_md(self, sample_report: Report, tmp_path: Path) -> None:
         path = write_md(sample_report, tmp_path)
         assert path.exists()
         content = path.read_text(encoding="utf-8")
@@ -69,7 +70,7 @@ class TestWriter:
         assert "Secrets Found" in content
         assert "AI Analysis Summary" in content
 
-    def test_write_all(self, sample_report: Report, tmp_path: pytest.TempPathFactory) -> None:
+    def test_write_all(self, sample_report: Report, tmp_path: Path) -> None:
         paths = write_all(sample_report, tmp_path)
         assert "json" in paths
         assert "csv" in paths
@@ -77,7 +78,7 @@ class TestWriter:
         for p in paths.values():
             assert p.exists()
 
-    def test_write_json_empty_findings(self, tmp_path: pytest.TempPathFactory) -> None:
+    def test_write_json_empty_findings(self, tmp_path: Path) -> None:
         report = Report(
             target="test.com",
             timestamp=datetime.datetime.now().isoformat(),

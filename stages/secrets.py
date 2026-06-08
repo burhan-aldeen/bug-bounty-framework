@@ -1,6 +1,8 @@
 import asyncio
 import logging
 import re
+import tempfile
+from pathlib import Path
 
 from core.logger import get_logger
 from core.models import AliveHost, SecretFinding, SecretType, Severity
@@ -10,39 +12,59 @@ logger = get_logger("stages.secrets")
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
-SECRET_PATHS: list[str] = [
-    "/.env", "/.git/config", "/.git/HEAD",
-    "/phpinfo.php", "/info.php",
-    "/wp-config.php.bak", "/config.json",
-    "/backup.sql", "/dump.sql",
-    "/robots.txt", "/sitemap.xml",
-    "/crossdomain.xml", "/client-access-policy.xml",
-    "/.htaccess", "/.htpasswd",
-    "/swagger.json", "/api-docs",
-    "/.aws/credentials", "/.azure/credentials",
-    "/.npmrc", "/.pypirc",
+SENSITIVE_PATHS: list[tuple[str, SecretType, Severity]] = [
+    ("/.git/config", SecretType.GIT_EXPOSED, Severity.CRITICAL),
+    ("/.env", SecretType.ENV_EXPOSED, Severity.CRITICAL),
+    ("/phpinfo.php", SecretType.CONFIG_EXPOSED, Severity.HIGH),
+    ("/info.php", SecretType.CONFIG_EXPOSED, Severity.HIGH),
+    ("/wp-config.php.bak", SecretType.CONFIG_EXPOSED, Severity.HIGH),
+    ("/config.json", SecretType.CONFIG_EXPOSED, Severity.HIGH),
+    ("/backup.sql", SecretType.CONFIG_EXPOSED, Severity.CRITICAL),
+    ("/dump.sql", SecretType.CONFIG_EXPOSED, Severity.CRITICAL),
+    ("/swagger.json", SecretType.CONFIG_EXPOSED, Severity.MEDIUM),
+    ("/api-docs", SecretType.CONFIG_EXPOSED, Severity.MEDIUM),
+    ("/.aws/credentials", SecretType.CONFIG_EXPOSED, Severity.CRITICAL),
+    ("/.azure/credentials", SecretType.CONFIG_EXPOSED, Severity.CRITICAL),
+    ("/.npmrc", SecretType.CONFIG_EXPOSED, Severity.MEDIUM),
+    ("/.pypirc", SecretType.CONFIG_EXPOSED, Severity.MEDIUM),
+    ("/health", SecretType.DEBUG_ENDPOINT, Severity.LOW),
+    ("/metrics", SecretType.DEBUG_ENDPOINT, Severity.MEDIUM),
+    ("/actuator", SecretType.DEBUG_ENDPOINT, Severity.MEDIUM),
+    ("/actuator/env", SecretType.DEBUG_ENDPOINT, Severity.HIGH),
+    ("/debug", SecretType.DEBUG_ENDPOINT, Severity.MEDIUM),
+    ("/console", SecretType.DEBUG_ENDPOINT, Severity.HIGH),
+    ("/server-status", SecretType.DEBUG_ENDPOINT, Severity.MEDIUM),
+    ("/crossdomain.xml", SecretType.CONFIG_EXPOSED, Severity.LOW),
+    ("/client-access-policy.xml", SecretType.CONFIG_EXPOSED, Severity.LOW),
+    ("/.htaccess", SecretType.CONFIG_EXPOSED, Severity.MEDIUM),
+    ("/.htpasswd", SecretType.CONFIG_EXPOSED, Severity.HIGH),
+    ("/robots.txt", SecretType.CONFIG_EXPOSED, Severity.LOW),
+    ("/sitemap.xml", SecretType.CONFIG_EXPOSED, Severity.LOW),
 ]
 
-JS_KEY_PATTERNS: list[re.Pattern] = [
+JS_SECRET_PATTERNS: list[re.Pattern] = [
     re.compile(r'["\'](?:api[_-]?key|apikey|api_key)["\']\s*[:=]\s*["\'][^"\']+["\']', re.I),
     re.compile(r'["\'](?:secret|token|password|auth)["\']\s*[:=]\s*["\'][^"\']+["\']', re.I),
     re.compile(r'["\'](?:aws_access_key_id|aws_secret_access_key|AZURE_)["\']', re.I),
     re.compile(r'(?:sk-[a-zA-Z0-9]{20,}|pk-[a-zA-Z0-9]{20,})'),
     re.compile(r'(?:ghp_[a-zA-Z0-9]{36,}|github_pat_[a-zA-Z0-9]{36,})'),
+    re.compile(r'(?:firebase|stripe|sentry_dsn|slack_token)', re.I),
 ]
 
 
-async def run(hosts: list[AliveHost], urls: list[str]) -> list[SecretFinding]:
-    logger.info("stage=secrets hosts=%d urls=%d", len(hosts), len(urls))
+async def run(hosts: list[AliveHost], all_urls: list[str], output_dir: Path | None = None) -> list[SecretFinding]:
+    logger.info("secrets: hosts=%d urls=%d", len(hosts), len(all_urls))
     secrets: list[SecretFinding] = []
 
+    # Phase 3: JS Secrets
+    js_secrets = await _check_js_files(all_urls, output_dir)
+    secrets.extend(js_secrets)
+
+    # Phase 4: Exposed Paths
     exposed = await _check_exposed_paths(hosts)
     secrets.extend(exposed)
 
-    js_secrets = await _check_js_files(urls)
-    secrets.extend(js_secrets)
-
-    logger.info("stage=secrets done secrets=%d", len(secrets))
+    logger.info("secrets: %d total secrets found", len(secrets))
     return secrets
 
 
@@ -57,44 +79,44 @@ async def _check_exposed_paths(hosts: list[AliveHost]) -> list[SecretFinding]:
     secrets: list[SecretFinding] = []
 
     async with httpx.AsyncClient(timeout=10.0, verify=False) as client:
-
-        async def probe(url: str, path: str) -> SecretFinding | None:
+        async def probe(url: str, path: str, st: SecretType, sev: Severity) -> SecretFinding | None:
             async with sem:
                 try:
                     response = await client.get(url)
                     if response.status_code in (200, 401, 403):
                         return SecretFinding(
                             url=url,
-                            secret_type=SecretType.CONFIG_EXPOSED,
-                            match=f"HTTP {response.status_code} — file accessible",
-                            severity=Severity.CRITICAL if path in ("/.env", "/.git/config")
-                            else Severity.HIGH,
+                            secret_type=st,
+                            match=f"HTTP {response.status_code} — {len(response.content)} bytes",
+                            severity=sev,
+                            detail=f"Exposed: {path}",
                         )
                 except Exception:
                     pass
             return None
 
         tasks = []
-        total = len(hosts) * len(SECRET_PATHS)
+        total = len(hosts) * len(SENSITIVE_PATHS)
         logger.info("secrets: probing %d paths across %d hosts", total, len(hosts))
         for host in hosts:
             base = host.url.rstrip("/")
-            for path in SECRET_PATHS:
-                tasks.append(probe(f"{base}{path}", path))
+            for path, st, sev in SENSITIVE_PATHS:
+                tasks.append(probe(f"{base}{path}", path, st, sev))
 
         batch_size = 100
         for i in range(0, len(tasks), batch_size):
             batch = tasks[i:i + batch_size]
             results = await asyncio.gather(*batch)
             secrets.extend(r for r in results if r is not None)
-            logger.info("secrets: %d/%d paths checked, %d found", min(i + batch_size, len(tasks)), total, len(secrets))
+            logger.info("secrets: %d/%d paths checked, %d found",
+                        min(i + batch_size, len(tasks)), total, len(secrets))
 
     logger.info("secrets: %d exposed paths found", len(secrets))
     return secrets
 
 
-async def _check_js_files(urls: list[str]) -> list[SecretFinding]:
-    js_urls = [u for u in urls if u.endswith(".js")]
+async def _check_js_files(all_urls: list[str], output_dir: Path | None = None) -> list[SecretFinding]:
+    js_urls = [u for u in all_urls if u.endswith(".js")]
     if not js_urls:
         return []
 
@@ -108,7 +130,6 @@ async def _check_js_files(urls: list[str]) -> list[SecretFinding]:
     secrets: list[SecretFinding] = []
 
     async with httpx.AsyncClient(timeout=10.0, verify=False) as client:
-
         async def scan_js(js_url: str) -> list[SecretFinding]:
             async with sem:
                 try:
@@ -117,7 +138,7 @@ async def _check_js_files(urls: list[str]) -> list[SecretFinding]:
                         return []
                     body = response.text
                     found = []
-                    for pattern in JS_KEY_PATTERNS:
+                    for pattern in JS_SECRET_PATTERNS:
                         for match in pattern.finditer(body):
                             found.append(
                                 SecretFinding(
@@ -125,7 +146,7 @@ async def _check_js_files(urls: list[str]) -> list[SecretFinding]:
                                     secret_type=SecretType.JS_SECRET,
                                     match=match.group(0)[:100],
                                     severity=Severity.CRITICAL,
-                                    detail="Hardcoded credential found in JavaScript file",
+                                    detail="Hardcoded credential in JS file",
                                 )
                             )
                     return found

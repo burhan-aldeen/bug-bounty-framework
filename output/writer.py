@@ -4,9 +4,48 @@ import datetime
 from pathlib import Path
 
 from core.logger import get_logger
-from core.models import Finding, Report, SecretFinding, Severity
+from core.models import Report
 
 logger = get_logger("output.writer")
+
+
+SENSITIVE_PATHS: list[str] = [
+    "/.git/config", "/.env", "/phpinfo.php", "/info.php",
+    "/wp-config.php.bak", "/config.json",
+    "/backup.sql", "/dump.sql",
+    "/robots.txt", "/sitemap.xml",
+    "/crossdomain.xml", "/client-access-policy.xml",
+    "/.htaccess", "/.htpasswd",
+    "/swagger.json", "/api-docs",
+    "/.aws/credentials", "/.azure/credentials",
+    "/.npmrc", "/.pypirc",
+    "/health", "/metrics", "/actuator", "/actuator/env",
+    "/debug", "/console", "/server-status",
+]
+
+
+def write_csv(report: Report, output_dir: Path) -> Path:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    path = output_dir / "report.csv"
+    with path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["Vulnerability", "URL", "Payload", "Impact"])
+        for finding in report.findings:
+            writer.writerow([
+                finding.finding_type.value.upper(),
+                finding.url,
+                finding.payload or "",
+                f"{finding.severity.value} - {finding.detail}",
+            ])
+        for secret in report.secrets:
+            writer.writerow([
+                "SECRET_" + secret.secret_type.value.upper(),
+                secret.url,
+                secret.match[:120],
+                secret.severity.value,
+            ])
+    logger.info("wrote CSV report: %s (%d bytes)", path, path.stat().st_size)
+    return path
 
 
 def write_json(report: Report, output_dir: Path) -> Path:
@@ -31,7 +70,7 @@ def write_json(report: Report, output_dir: Path) -> Path:
             {
                 "url": s.url,
                 "secret_type": s.secret_type.value,
-                "match": s.match[:120] + ("…" if len(s.match) > 120 else ""),
+                "match": s.match[:120],
                 "severity": s.severity.value,
                 "detail": s.detail,
             }
@@ -45,78 +84,37 @@ def write_json(report: Report, output_dir: Path) -> Path:
     return path
 
 
-def write_csv(report: Report, output_dir: Path) -> Path:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    path = output_dir / "report.csv"
-    with path.open("w", encoding="utf-8", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(["Type", "URL", "Parameter", "Payload", "Confidence", "Severity", "Detail"])
-        for finding in report.findings:
-            writer.writerow([
-                finding.finding_type.value,
-                finding.url,
-                finding.parameter or "",
-                finding.payload or "",
-                finding.confidence,
-                finding.severity.value,
-                finding.detail,
-            ])
-        for secret in report.secrets:
-            writer.writerow([
-                "secret_" + secret.secret_type.value,
-                secret.url,
-                "",
-                "",
-                "",
-                secret.severity.value,
-                secret.detail or secret.match[:120],
-            ])
-    logger.info("wrote CSV report: %s (%d bytes)", path, path.stat().st_size)
-    return path
-
-
 def write_md(report: Report, output_dir: Path) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / "report.md"
-    lines: list[str] = []
-    lines.append(f"# Bug Bounty Report — {report.target}")
-    lines.append(f"**Generated**: {report.timestamp}")
-    lines.append("")
-    lines.append("## Findings")
-
-    by_severity: dict[str, list[Finding]] = {}
-    for f in report.findings:
-        by_severity.setdefault(f.severity.value, []).append(f)
-
-    for sev in Severity:
-        items = by_severity.get(sev.value, [])
-        if items:
-            lines.append(f"### {sev.value.upper()}")
-            for f in items:
-                lines.append(f"- **[{f.finding_type.value}]** {f.url}")
-                if f.parameter:
-                    lines.append(f"  - Parameter: `{f.parameter}`")
-                if f.payload:
-                    lines.append(f"  - Payload: `{f.payload}`")
-                lines.append(f"  - Confidence: {f.confidence}")
+    lines = [
+        f"# Bug Bounty Report — {report.target}",
+        f"**Generated**: {report.timestamp}",
+        "",
+        "## Findings",
+    ]
+    if report.findings:
+        for f in report.findings:
+            lines.append(f"- **[{f.severity.value.upper()}][{f.finding_type.value}]** {f.url}")
+            if f.parameter:
+                lines.append(f"  - Parameter: `{f.parameter}`")
+            if f.payload:
+                lines.append(f"  - Payload: `{f.payload}`")
+            lines.append(f"  - {f.detail}")
+    else:
+        lines.append("*No findings*")
 
     if report.secrets:
-        lines.append("")
-        lines.append("## Secrets Found")
+        lines.extend(["", "## Secrets Found"])
         for s in report.secrets:
-            lines.append(f"- **[{s.severity.value}]** {s.url}")
+            lines.append(f"- **[{s.severity.value.upper()}]** {s.url}")
             lines.append(f"  - Type: {s.secret_type.value}")
             lines.append(f"  - Match: `{s.match[:100]}`")
 
     if report.ai_summary:
-        lines.append("")
-        lines.append("## AI Analysis Summary")
-        lines.append(report.ai_summary)
+        lines.extend(["", "## AI Analysis Summary", report.ai_summary])
 
-    lines.append("")
-    lines.append("---")
-    lines.append(f"*Report generated by Bug Bounty Framework*")
-
+    lines.extend(["", "---", "*Report generated by Bug Bounty Framework*"])
     with path.open("w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
     logger.info("wrote MD report: %s (%d bytes)", path, path.stat().st_size)

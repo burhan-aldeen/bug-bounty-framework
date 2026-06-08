@@ -1,5 +1,3 @@
-import json
-
 from core.logger import get_logger
 from core.models import Subdomain
 
@@ -23,6 +21,7 @@ async def run(domain: str) -> list[Subdomain]:
 
 
 def parse_output(stdout: str, source: str = "crtsh") -> list[Subdomain]:
+    import json
     seen: set[str] = set()
     subs: list[Subdomain] = []
     try:

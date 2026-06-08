@@ -1,13 +1,13 @@
 from core.logger import get_logger
 from core.runner import run_captured, require_tool
 
-logger = get_logger("tools.gau")
+logger = get_logger("tools.waybackurls")
 
 
 async def run(domain: str) -> list[str]:
-    require_tool("gau")
-    cmd = ["gau", domain, "--silent"]
-    logger.info("gau: fetching urls for %s", domain)
+    require_tool("waybackurls")
+    cmd = ["waybackurls", domain]
+    logger.info("waybackurls: fetching for %s", domain)
     result = await run_captured(cmd)
     return parse_output(result.stdout)
 
@@ -19,6 +19,6 @@ def parse_output(stdout: str) -> list[str]:
         if line and line.startswith("http"):
             urls.append(line)
     if not urls:
-        logger.warning("gau: no urls found")
-    logger.info("gau: %d urls collected", len(urls))
+        logger.warning("waybackurls: no urls found")
+    logger.info("waybackurls: %d urls collected", len(urls))
     return urls

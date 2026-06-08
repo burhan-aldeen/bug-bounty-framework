@@ -1,48 +1,45 @@
-import json
-
 from core.logger import get_logger
 from core.models import Finding, FindingType, Severity
 from core.runner import run_captured, require_tool
 
 logger = get_logger("tools.nuclei")
 
-SEVERITY_MAP: dict[str, Severity] = {
-    "critical": Severity.CRITICAL,
-    "high": Severity.HIGH,
-    "medium": Severity.MEDIUM,
-    "low": Severity.LOW,
-    "info": Severity.INFO,
-}
 
-
-async def run(
-    targets: list[str],
-    templates: str = "xss,sql-injection,rce,ssrf",
-    severity: str = "medium,high,critical",
-) -> list[Finding]:
+async def run(urls: list[str], templates: str = "xss", severity: str = "medium,high,critical") -> list[Finding]:
     require_tool("nuclei")
-    input_data = "\n".join(targets)
+    if not urls:
+        return []
+    input_data = "\n".join(urls).encode("utf-8")
     cmd = [
-        "nuclei",
-        "-silent",
+        "nuclei", "-silent",
         "-t", templates,
         "-severity", severity,
         "-json",
     ]
-    logger.info("nuclei: scanning %d targets with %s", len(targets), templates)
-    result = await run_captured(cmd, stdin_data=input_data.encode())
+    logger.info("nuclei: scanning %d targets with %s", len(urls), templates)
+    result = await run_captured(cmd, stdin_data=input_data)
     return parse_output(result.stdout)
 
 
 def parse_output(stdout: str) -> list[Finding]:
-    findings = []
+    import json
+    findings: list[Finding] = []
     for line in stdout.strip().splitlines():
         line = line.strip()
         if not line:
             continue
         try:
             data = json.loads(line)
-            raw_type = str(data.get("type", data.get("info", {}).get("name", "unknown"))).lower()
+            info = data.get("info", {})
+            raw_type = str(info.get("name", "")).lower()
+            severity_str = info.get("severity", "medium")
+            severity_map = {
+                "info": Severity.INFO, "low": Severity.LOW,
+                "medium": Severity.MEDIUM, "high": Severity.HIGH,
+                "critical": Severity.CRITICAL,
+            }
+            sev = severity_map.get(severity_str, Severity.MEDIUM)
+
             if "xss" in raw_type:
                 ft = FindingType.XSS
             elif "sql" in raw_type:
@@ -51,27 +48,24 @@ def parse_output(stdout: str) -> list[Finding]:
                 ft = FindingType.SSRF
             elif "rce" in raw_type or "command" in raw_type:
                 ft = FindingType.RCE
-            elif "ssti" in raw_type or "template" in raw_type:
-                ft = FindingType.SSTI
             elif "redirect" in raw_type or "open-redirect" in raw_type:
                 ft = FindingType.OPEN_REDIRECT
+            elif "ssti" in raw_type or "template" in raw_type:
+                ft = FindingType.SSTI
             else:
                 ft = FindingType.XSS
 
-            raw_sev = str(data.get("info", {}).get("severity", "medium")).lower()
-            severity = SEVERITY_MAP.get(raw_sev, Severity.MEDIUM)
-            matched = data.get("matched-at", data.get("host", ""))
             findings.append(
                 Finding(
                     finding_type=ft,
-                    url=matched,
-                    detail=data.get("info", {}).get("name", raw_type),
-                    severity=severity,
+                    url=data.get("host", data.get("matched-at", "")),
+                    detail=f"{info.get('name', '')} - {info.get('description', '')}",
+                    severity=sev,
                     confidence=0.7,
                 )
             )
-        except (json.JSONDecodeError, KeyError) as exc:
-            logger.warning("nuclei: failed to parse line: %s", exc)
+        except json.JSONDecodeError:
+            continue
     if not findings:
         logger.warning("nuclei: no findings detected")
     logger.info("nuclei: %d findings", len(findings))
