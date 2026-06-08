@@ -132,7 +132,7 @@ async def run_scan_list(targets_file: Path | None, config: Config, fresh: bool =
             logger.warning("no subdomains found, trying root domains")
             all_domains = targets
         logger.info("=== PHASE 1b: ALIVE CHECK (%d unique hosts) ===", len(all_domains))
-        all_alive = await recon.check_alive(list(dict.fromkeys(all_domains)))
+        all_alive = await recon.check_alive(list(dict.fromkeys(all_domains)), output_dir=config.scan.output_dir)
         checkpoint.save_phase(cp_dir, 2, "1b_alive", all_alive)
 
     # ----------------------------------------------------------------

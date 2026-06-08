@@ -1,52 +1,88 @@
+import asyncio
 import json
+import shutil
 import tempfile
 from pathlib import Path
 
 from core.logger import get_logger
 from core.models import AliveHost
-from core.runner import run_captured, require_tool
 
 logger = get_logger("tools.httpx")
+
+_HTTPX_TIMEOUT = 600
 
 
 async def run(
     domains: list[str],
     ports: str = "80,443",
-    extra_flags: list[str] | None = None,
+    output_dir: Path | None = None,
 ) -> list[AliveHost]:
-    require_tool("httpx")
+    executable = shutil.which("httpx")
+    if executable is None:
+        raise FileNotFoundError("tool not installed: httpx")
+
     cmd = [
         "httpx",
         "-silent",
         "-ports", ports,
         "-status-code",
         "-title",
+        "-location",
+        "-server",
+        "-cname",
+        "-follow-redirects",
         "-tech-detect",
-        "-cdn",
-        "-content-length",
         "-json",
         "-timeout", "5",
         "-retries", "1",
-        "-threads", "100",
-        "-no-fallback",
+        "-threads", "200",
+        "--ip",
     ]
-    if extra_flags:
-        cmd.extend(extra_flags)
 
-    # write domains to temp file — more reliable than stdin with 1000+ hosts
     tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False)
     tmp_path = Path(tmp.name)
+    out_lines: list[str] = []
+    save_path = (output_dir / "httpx_results.txt") if output_dir else None
+
     try:
         tmp.write("\n".join(domains))
         tmp.close()
         cmd.extend(["-l", str(tmp_path)])
         logger.info("httpx: probing %d hosts", len(domains))
-        result = await run_captured(cmd)
+        logger.info("running: %s", " ".join(cmd))
+
+        process = await asyncio.create_subprocess_exec(
+            executable,
+            *cmd[1:],
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        while True:
+            line_bytes = await process.stdout.readline()
+            if not line_bytes:
+                break
+            line = line_bytes.decode("utf-8", errors="replace").rstrip()
+            if line:
+                print(line)
+                out_lines.append(line)
+
+        await asyncio.wait_for(process.wait(), timeout=_HTTPX_TIMEOUT)
+
+    except TimeoutError:
+        logger.warning("httpx timed out after %ds", _HTTPX_TIMEOUT)
     finally:
         if tmp_path.exists():
             tmp_path.unlink(missing_ok=True)
 
-    return parse_output(result.stdout)
+    stdout = "\n".join(out_lines)
+
+    if save_path:
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        save_path.write_text(stdout)
+        logger.info("httpx results saved to %s (%d lines)", save_path, len(out_lines))
+
+    return parse_output(stdout)
 
 
 def parse_output(stdout: str) -> list[AliveHost]:

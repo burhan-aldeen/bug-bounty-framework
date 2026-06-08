@@ -1,4 +1,5 @@
 import asyncio
+from pathlib import Path
 
 from core.logger import get_logger
 from core.models import AliveHost, ScanResult, Subdomain
@@ -37,9 +38,9 @@ async def enumerate_subdomains(domain: str) -> list[Subdomain]:
     return await _enumerate_subdomains(domain)
 
 
-async def check_alive(domains: list[str]) -> list[AliveHost]:
+async def check_alive(domains: list[str], output_dir: Path | None = None) -> list[AliveHost]:
     logger.debug("recon/alive: %d hosts", len(domains))
-    return await _check_alive(domains)
+    return await _check_alive(domains, output_dir)
 
 
 async def collect_urls(domain: str, hosts: list[AliveHost]) -> list[str]:
@@ -79,9 +80,9 @@ async def _enumerate_subdomains(domain: str) -> list[Subdomain]:
     return all_subdomains
 
 
-async def _check_alive(domains: list[str]) -> list[AliveHost]:
+async def _check_alive(domains: list[str], output_dir: Path | None = None) -> list[AliveHost]:
     try:
-        return await httpx_tool.run(domains)
+        return await httpx_tool.run(domains, output_dir=output_dir)
     except FileNotFoundError:
         logger.warning("httpx not installed, skipping alive check")
         return []
