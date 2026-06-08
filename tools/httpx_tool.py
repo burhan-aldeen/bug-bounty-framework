@@ -1,6 +1,7 @@
 import asyncio
 import json
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 
@@ -64,7 +65,13 @@ async def run(
                 break
             line = line_bytes.decode("utf-8", errors="replace").rstrip()
             if line:
-                print(line)
+                buf = getattr(sys.stdout, "buffer", None)
+                try:
+                    if buf:
+                        buf.write((line + "\n").encode("utf-8"))
+                        buf.flush()
+                except Exception:
+                    pass
                 out_lines.append(line)
 
         await asyncio.wait_for(process.wait(), timeout=_HTTPX_TIMEOUT)
@@ -79,7 +86,7 @@ async def run(
 
     if save_path:
         save_path.parent.mkdir(parents=True, exist_ok=True)
-        save_path.write_text(stdout)
+        save_path.write_text(stdout, encoding="utf-8")
         logger.info("httpx results saved to %s (%d lines)", save_path, len(out_lines))
 
     return parse_output(stdout)

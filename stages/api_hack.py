@@ -1,6 +1,5 @@
 from core.logger import get_logger
 from core.models import AliveHost, Finding, FindingType, Severity
-from core.runner import run_captured
 
 logger = get_logger("stages.api_hack")
 
@@ -34,30 +33,33 @@ async def run(
 
 async def _check_graphql_introspection(hosts: list[AliveHost]) -> list[Finding]:
     findings: list[Finding] = []
-    for host in hosts:
-        if "graphql" in host.url.lower():
-            try:
-                result = await run_captured([
-                    "curl", "-s", "-X", "POST",
-                    host.url,
-                    "-H", "Content-Type: application/json",
-                    "-d", GRAPHQL_PROBE_QUERY,
-                ])
-                if result.stdout and ("__schema" in result.stdout or "queryType" in result.stdout):
-                    findings.append(
-                        Finding(
-                            finding_type=FindingType.GRAPHQL,
-                            url=host.url,
-                            detail="GraphQL introspection is enabled",
-                            severity=Severity.HIGH,
-                            confidence=0.9,
-                        )
+    try:
+        import httpx
+    except ImportError:
+        logger.warning("httpx not installed, skipping GraphQL introspection")
+        return findings
+    async with httpx.AsyncClient(timeout=15.0, verify=False) as client:
+        for host in hosts:
+            if "graphql" in host.url.lower():
+                try:
+                    response = await client.post(
+                        host.url,
+                        headers={"Content-Type": "application/json"},
+                        content=GRAPHQL_PROBE_QUERY,
                     )
-            except FileNotFoundError:
-                logger.warning("curl not available for GraphQL probe")
-                break
-            except Exception as exc:
-                logger.warning("graphql probe failed for %s: %s", host.url, exc)
+                    body = response.text
+                    if "__schema" in body or "queryType" in body:
+                        findings.append(
+                            Finding(
+                                finding_type=FindingType.GRAPHQL,
+                                url=host.url,
+                                detail="GraphQL introspection is enabled",
+                                severity=Severity.HIGH,
+                                confidence=0.9,
+                            )
+                        )
+                except Exception as exc:
+                    logger.warning("graphql probe failed for %s: %s", host.url, exc)
     return findings
 
 

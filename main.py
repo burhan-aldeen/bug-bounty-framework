@@ -1,6 +1,7 @@
 import asyncio
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 from core import checkpoint
 from core.config import Config
@@ -10,6 +11,11 @@ from output.writer import write_all
 from stages import recon, hunt, api_hack, secrets as secrets_stage, report as report_stage
 
 logger = get_logger("main")
+
+
+def _extract_host(url: str) -> str:
+    host = urlparse(url).hostname
+    return host if host else url
 
 
 async def run_scan(target: str, config: Config) -> ScanResult:
@@ -91,7 +97,7 @@ async def run_scan_list(targets_file: Path | None, config: Config, fresh: bool =
     # ----------------------------------------------------------------
     # Phase 1a — Subdomain enumeration: ALL targets first
     # ----------------------------------------------------------------
-    if resume and last_phase >= 1 and not subs_list:
+    if resume and last_phase >= 1:
         raw = checkpoint.load_phase(cp_dir, 1, "1a_subdomains")
         all_subdomain_sets = checkpoint.rebuild_subdomains(raw) if raw else []
         if not all_subdomain_sets:
@@ -131,7 +137,7 @@ async def run_scan_list(targets_file: Path | None, config: Config, fresh: bool =
         output_dir = config.scan.output_dir
         output_dir.mkdir(parents=True, exist_ok=True)
         found_path = output_dir / "found_list.txt"
-        found_path.write_text("\n".join(all_unique))
+        found_path.write_text("\n".join(all_unique), encoding="utf-8")
         logger.info("saved %d unique subdomains to %s", len(all_unique), found_path)
 
         checkpoint.save_phase(cp_dir, 1, "1a_subdomains", all_subdomain_sets)
@@ -175,7 +181,7 @@ async def run_scan_list(targets_file: Path | None, config: Config, fresh: bool =
         for i, target in enumerate(targets):
             host_urls = [
                 h for h in all_alive
-                if target == _extract_root(h.url.split("://")[-1].split("/")[0])
+                if target == _extract_root(_extract_host(h.url))
             ]
             if not host_urls:
                 logger.info("no alive hosts matched for %s, skipping URL collection", target)
@@ -197,9 +203,9 @@ async def run_scan_list(targets_file: Path | None, config: Config, fresh: bool =
         result.subdomains = all_subdomain_sets[i]
         result.alive_hosts = [
             h for h in all_alive
-            if target == _extract_root(h.url.split("://")[-1].split("/")[0])
+            if target == _extract_root(_extract_host(h.url))
         ]
-        result.urls = [u for u in all_urls if target == _extract_root(u.split("://")[-1].split("/")[0])]
+        result.urls = [u for u in all_urls if target == _extract_root(_extract_host(u))]
         all_results.append(result)
 
     # ----------------------------------------------------------------
@@ -251,15 +257,15 @@ async def run_scan_list(targets_file: Path | None, config: Config, fresh: bool =
         tgt = targets[i]
         result.findings = [
             f for f in all_hunt_findings
-            if tgt in f.url or tgt in result.urls
+            if f.url and tgt == _extract_root(_extract_host(f.url))
         ]
         result.findings.extend(
             f for f in all_api_findings
-            if tgt in f.url or tgt in result.urls
+            if f.url and tgt == _extract_root(_extract_host(f.url))
         )
         result.secrets = [
             s for s in all_secrets
-            if tgt in s.url or tgt in result.urls
+            if s.url and tgt == _extract_root(_extract_host(s.url))
         ]
 
         report = await report_stage.run(result, config=config)

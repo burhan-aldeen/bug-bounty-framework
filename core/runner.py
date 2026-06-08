@@ -54,7 +54,7 @@ async def run_captured(
         )
         result = ToolResult(
             tool=tool,
-            returncode=process.returncode or 0,
+            returncode=process.returncode if process.returncode is not None else 0,
             stdout=stdout.decode("utf-8", errors="replace"),
             stderr=stderr.decode("utf-8", errors="replace"),
         )

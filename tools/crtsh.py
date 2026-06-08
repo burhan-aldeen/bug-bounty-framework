@@ -1,19 +1,25 @@
 import json
-import urllib.request
 
 from core.logger import get_logger
 from core.models import Subdomain
-from core.runner import run_captured
 
 logger = get_logger("tools.crtsh")
 
 
 async def run(domain: str) -> list[Subdomain]:
     url = f"https://crt.sh/?q=%25.{domain}&output=json"
-    cmd = ["curl", "-s", "--max-time", "30", url]
     logger.info("crtsh: querying %s", domain)
-    result = await run_captured(cmd)
-    return parse_output(result.stdout, "crtsh")
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=30.0, verify=False) as c:
+            response = await c.get(url)
+            return parse_output(response.text, "crtsh")
+    except ImportError:
+        logger.warning("httpx not installed, skipping crtsh")
+        return []
+    except Exception as exc:
+        logger.warning("crtsh request failed: %s", exc)
+        return []
 
 
 def parse_output(stdout: str, source: str = "crtsh") -> list[Subdomain]:

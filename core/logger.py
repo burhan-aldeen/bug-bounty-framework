@@ -1,3 +1,4 @@
+import atexit
 import logging
 import sys
 from logging.handlers import QueueHandler, QueueListener, RotatingFileHandler
@@ -6,10 +7,11 @@ from queue import Queue
 
 
 _LOGGER_INITIALIZED: bool = False
+_listener: QueueListener | None = None
 
 
 def configure_logging(log_file: Path | str = "scan.log", level: str = "INFO") -> None:
-    global _LOGGER_INITIALIZED
+    global _LOGGER_INITIALIZED, _listener
     if _LOGGER_INITIALIZED:
         return
 
@@ -20,7 +22,7 @@ def configure_logging(log_file: Path | str = "scan.log", level: str = "INFO") ->
     root.setLevel(getattr(logging, level.upper(), logging.INFO))
     root.handlers.clear()
 
-    queue: Queue = Queue(-1)
+    queue: Queue = Queue(10000)
     queue_handler = QueueHandler(queue)
     queue_handler.setLevel(logging.DEBUG)
     root.addHandler(queue_handler)
@@ -37,10 +39,16 @@ def configure_logging(log_file: Path | str = "scan.log", level: str = "INFO") ->
     file_handler.setFormatter(formatter)
     file_handler.setLevel(logging.DEBUG)
 
-    listener = QueueListener(queue, stream_handler, file_handler)
-    listener.start()
+    _listener = QueueListener(queue, stream_handler, file_handler)
+    _listener.start()
+    atexit.register(_stop_listener)
 
     _LOGGER_INITIALIZED = True
+
+
+def _stop_listener() -> None:
+    if _listener is not None:
+        _listener.stop()
 
 
 def get_logger(name: str) -> logging.Logger:

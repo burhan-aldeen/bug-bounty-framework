@@ -32,8 +32,8 @@ def _serialize(obj: Any) -> Any:
 def save_phase(output_dir: Path, phase: int, name: str, data: Any) -> None:
     cp = _cp_dir(output_dir)
     cp.mkdir(parents=True, exist_ok=True)
-    _phase_path(output_dir).write_text(str(phase))
-    _data_path(output_dir, name).write_text(json.dumps(data, default=_serialize, indent=2))
+    _phase_path(output_dir).write_text(str(phase), encoding="utf-8")
+    _data_path(output_dir, name).write_text(json.dumps(data, default=_serialize, indent=2), encoding="utf-8")
     logger.debug("checkpoint saved: phase=%d %s", phase, name)
 
 
@@ -95,6 +95,10 @@ def _alive_from_dict(d: dict) -> AliveHost:
 
 
 def _finding_from_dict(d: dict) -> Finding:
+    try:
+        sev = Severity(d.get("severity", "medium"))
+    except ValueError:
+        sev = Severity.MEDIUM
     return Finding(
         finding_type=d["finding_type"],
         url=d["url"],
@@ -102,5 +106,5 @@ def _finding_from_dict(d: dict) -> Finding:
         payload=d.get("payload"),
         confidence=d.get("confidence", 0.5),
         detail=d.get("detail", ""),
-        severity=Severity(d.get("severity", "medium")),
+        severity=sev,
     )

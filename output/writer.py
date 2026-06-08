@@ -4,7 +4,7 @@ import datetime
 from pathlib import Path
 
 from core.logger import get_logger
-from core.models import Finding, Report, SecretFinding
+from core.models import Finding, Report, SecretFinding, Severity
 
 logger = get_logger("output.writer")
 
@@ -31,7 +31,7 @@ def write_json(report: Report, output_dir: Path) -> Path:
             {
                 "url": s.url,
                 "secret_type": s.secret_type.value,
-                "match": s.match[:120],
+                "match": s.match[:120] + ("…" if len(s.match) > 120 else ""),
                 "severity": s.severity.value,
                 "detail": s.detail,
             }
@@ -84,14 +84,14 @@ def write_md(report: Report, output_dir: Path) -> Path:
     lines.append("")
     lines.append("## Findings")
 
-    by_severity = {"critical": [], "high": [], "medium": [], "low": [], "info": []}
+    by_severity: dict[str, list[Finding]] = {}
     for f in report.findings:
         by_severity.setdefault(f.severity.value, []).append(f)
 
-    for sev in ("critical", "high", "medium", "low", "info"):
-        items = by_severity.get(sev, [])
+    for sev in Severity:
+        items = by_severity.get(sev.value, [])
         if items:
-            lines.append(f"### {sev.upper()}")
+            lines.append(f"### {sev.value.upper()}")
             for f in items:
                 lines.append(f"- **[{f.finding_type.value}]** {f.url}")
                 if f.parameter:
