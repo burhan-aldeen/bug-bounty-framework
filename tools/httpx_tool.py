@@ -1,4 +1,6 @@
 import json
+import tempfile
+from pathlib import Path
 
 from core.logger import get_logger
 from core.models import AliveHost
@@ -13,7 +15,6 @@ async def run(
     extra_flags: list[str] | None = None,
 ) -> list[AliveHost]:
     require_tool("httpx")
-    input_data = "\n".join(domains)
     cmd = [
         "httpx",
         "-silent",
@@ -27,11 +28,24 @@ async def run(
         "-timeout", "5",
         "-retries", "1",
         "-threads", "100",
+        "-no-fallback",
     ]
     if extra_flags:
         cmd.extend(extra_flags)
-    logger.info("httpx: probing %d hosts", len(domains))
-    result = await run_captured(cmd, stdin_data=input_data.encode())
+
+    # write domains to temp file — more reliable than stdin with 1000+ hosts
+    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False)
+    tmp_path = Path(tmp.name)
+    try:
+        tmp.write("\n".join(domains))
+        tmp.close()
+        cmd.extend(["-l", str(tmp_path)])
+        logger.info("httpx: probing %d hosts", len(domains))
+        result = await run_captured(cmd)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
+
     return parse_output(result.stdout)
 
 
